@@ -19,6 +19,7 @@ library
                      , Descent
                      , ShadowsOfTheKnight
                      , SkynetRevolution
+                     , SkynetRevolution2
   build-depends:       base >= 4.7 && < 5
                      , bifunctors
                      , containers

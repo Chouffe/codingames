@@ -58,9 +58,9 @@ data GraphState = GSt
 
 initGraphState :: Vertex -> GraphState
 initGraphState v = GSt { visited = fromList []
-                      , frontier = [v]
-                      , linkToCut = Nothing
-                      }
+                       , frontier = [v]
+                       , linkToCut = Nothing
+                       }
 
 bfs :: Graph -> Set Gateway -> State GraphState ()
 bfs graph gateways = do
