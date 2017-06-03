@@ -1,8 +1,10 @@
 module Main where
 
-import           SkynetRevolution2Spec (spec)
+import qualified SkynetRevolution2Spec
 import           Test.Hspec
+import qualified WarSpec
 
 main :: IO ()
 main = hspec $ do
-  SkynetRevolution2Spec.spec
+  WarSpec.spec
+  -- SkynetRevolution2Spec.spec

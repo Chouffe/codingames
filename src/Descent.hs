@@ -1,7 +1,6 @@
 module Descent where
 
 import           Control.Monad
-import           Data.Bifunctor (bimap)
 import           Data.Foldable
 import           System.IO
 

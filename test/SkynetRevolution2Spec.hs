@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+
 module SkynetRevolution2Spec where
 
 import           Data.List         (intersperse)
