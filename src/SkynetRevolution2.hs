@@ -12,7 +12,6 @@ import           Data.Maybe                       (fromJust, isJust)
 import           Data.Ord                         (comparing)
 import           Data.Set                         (Set, fromList, insert,
                                                    member, toList)
-import           Debug.Trace                      (trace)
 import           System.IO
 
 -- TODO:
