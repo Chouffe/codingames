@@ -1,3 +1,6 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections       #-}
+
 module SkynetRevolution2 where
 
 import           Control.Monad
@@ -9,19 +12,27 @@ import           Data.Map                         (Map, assocs, empty, fromList,
                                                    fromListWith, insert, lookup,
                                                    updateWithKey)
 import qualified Data.Map                         as M
-import           Data.Maybe                       (fromJust, isJust)
+import           Data.Maybe                       (catMaybes, fromJust, isJust)
 import           Data.Ord                         (comparing)
-import           Data.Set                         (Set, difference, fromList,
-                                                   insert, member, toList)
+import           Data.Set                         (Set, fromList, insert,
+                                                   intersection, member, toList)
 import qualified Data.Set                         as S
+-- import           Debug.Trace                      (trace)
 import           System.IO
 
--- TODO:
---
--- Implement a max hop BFS for finding remainingSeparableLinks
--- Profile GHC perf to see bottlenecks
--- write regression tests
--- improve utility heuristic function
+-- TODO: Cleanup
+
+-- utils
+
+safeHead :: [a] -> Maybe a
+safeHead []    = Nothing
+safeHead (x:_) = Just x
+
+safeLast :: [a] -> Maybe a
+safeLast = safeHead . reverse
+
+sortAndGroup :: Ord a => [(a, b)] -> Map a [b]
+sortAndGroup as = fromListWith (++) [(k, [v]) | (k, v) <- as]
 
 -- Data Modeling
 
@@ -51,19 +62,6 @@ data World = World
 data GameTree = Leaf World GameState
               | Node Turn World (Map Action GameTree)
               deriving (Eq, Show)
-
--- utils
-
-safeHead :: [a] -> Maybe a
-safeHead []    = Nothing
-safeHead (x:_) = Just x
-
-safeLast :: [a] -> Maybe a
-safeLast = safeHead . reverse
-
--- Instead of using sortBy . groupBy
-sortAndGroup :: Ord a => [(a, b)] -> Map a [b]
-sortAndGroup as = fromListWith (++) [(k, [v]) | (k, v) <- as]
 
 nextTurn :: Turn -> Turn
 nextTurn Player = Agent
@@ -106,7 +104,6 @@ generateGameTree turn world
         fmap (\action -> (action, generateGameTree (nextTurn turn) (performAction action world)))
         (getActions world)
 
--- TODO: debug and check what is evaluated
 safeGameTree :: Int -> GameTree -> Bool
 safeGameTree 0 (Node _ _ _)                        = True
 safeGameTree _ (Leaf _ Won)                        = True
@@ -123,8 +120,6 @@ pathToLink path
                   _      -> Nothing
   where n = length path
 
--- TODO: test and improve
--- Add a depth parameter and use minmax?
 utility :: GameTree -> Double
 utility (Leaf _ Won)  = 0.0
 utility (Leaf _ Lost) = 100.0
@@ -155,7 +150,7 @@ playerPolicy world gameTreeMap = case msortedActions of
 
 performAction :: Action -> World -> World
 performAction (Move to)    world = World (mgateways world) (mgraph world) to
-performAction (Sever link) world = World (mgateways world) (serverLink (mgraph world) link) (magent world)
+performAction (Sever link) world = World (mgateways world) (severLink (mgraph world) link) (magent world)
 
 pickPlayerAction :: Int -> GameTree -> Maybe Action
 pickPlayerAction depth (Node Player world gameTreeMap) =
@@ -178,16 +173,16 @@ makeGraph links =
             nub $
             links >>= \(i, o) -> [(i, o), (o, i)]
 
-serverLink :: Graph -> Link -> Graph
-serverLink graph (i, o) = cutLink i o $ cutLink o i graph
+severLink :: Graph -> Link -> Graph
+severLink graph (i, o) = cutLink i o $ cutLink o i graph
   where cutLink input output g = updateWithKey (\_ links -> case delete input links of
                                                               [] -> Nothing
                                                               xs -> Just xs) output g
 
--- Game Logic
-
 children :: Graph -> Vertex -> Maybe [Vertex]
 children graph v = Data.Map.lookup v graph
+
+-- Game Logic
 
 initGraphSearchState :: Vertex -> GraphSearchState
 initGraphSearchState v = GSS
@@ -222,6 +217,10 @@ worldBfs world = do
 runWorldBfs :: World -> GraphSearchState
 runWorldBfs world = execState (worldBfs world)
                               (initGraphSearchState (magent world))
+
+runWorldBfs2 :: World -> (Vertex -> Bool) -> GraphSearchState
+runWorldBfs2 world p = execState (worldBfs2 world p)
+                                 (initGraphSearchState (magent world))
 
 -- Parsers
 
@@ -277,58 +276,100 @@ main = do
     mnetwork <- fmap parseNetwork getLine
     case mnetwork of
       Nothing -> return ()                     -- Parsing failed
-      Just (n, l, e) -> do
+      Just (_, l, e) -> do
         ls <- replicateM l getLine
         gs <- replicateM e getLine
         case parseGameLinksAndGateways ls gs of
           Nothing                -> return ()  -- Parsing failed
-          Just (graph, gateways) -> gameLoop ((n, l, e), ls, gs) graph gateways
+          Just (graph, gateways) -> gameLoop graph gateways
 
-debugInput :: ((Int, Int, Int), [String], [String]) -> IO ()
-debugInput ((n, l, e), ls, gs) = do
-  hPutStrLn stderr $ show n ++ " " ++ show l ++ " " ++ show e
-  mapM_ (hPutStrLn stderr) ls
-  mapM_ (hPutStrLn stderr) gs
 
-gameLoop :: ((Int, Int, Int), [String], [String]) -> Graph -> Set Gateway -> IO ()
-gameLoop ref graph gateways = do
-  debugInput ref
+gameLoop :: Graph -> Set Gateway -> IO ()
+gameLoop graph gateways = do
   mposition <- fmap parseGameLoop getLine
   case mposition of
     Nothing       -> hPutStrLn stderr "Parsing failed" >> return ()                 -- Parsing failed
     Just position ->
       let world = (World gateways graph position)
-          gameTree = generateGameTree Player world
-      in case pickPlayerAction 3 gameTree of
+          -- gameTree = generateGameTree Player world
+      in case pickAction world of
            Just action@(Sever (i, o)) -> do
              putStrLn $ show i ++ " " ++ show o
-             gameLoop ref (mgraph (performAction action world)) gateways
+             gameLoop (mgraph (performAction action world)) gateways
            _ -> hPutStrLn stderr "No action found..." >> return ()
-
--- Tests
-
-testGraph :: Graph
-testGraph = makeGraph [(0, 1), (0, 2), (1, 3), (2, 3)]
-
-testGraph2 :: Graph
-testGraph2 = makeGraph [(0, 1), (0, 2), (1, 3), (2, 3), (3, 4), (3, 5)]
-
-testWorld :: World
-testWorld = World (Data.Set.fromList [3]) testGraph 0
-
-testWorld2 :: World
-testWorld2 = World (Data.Set.fromList [4, 5]) testGraph2 0
-
-testWorld3 :: World
-testWorld3 = World (Data.Set.fromList [3, 5]) testGraph2 0
-
+      -- in case pickPlayerAction 3 gameTree of
+      --      Just action@(Sever (i, o)) -> do
+      --        putStrLn $ show i ++ " " ++ show o
+      --        gameLoop ref (mgraph (performAction action world)) gateways
+      --      _ -> hPutStrLn stderr "No action found..." >> return ()
 
 -- Second attempt
 
 dangerousVertices :: World -> Set Vertex
-dangerousVertices (World gateways graph _) =
-  let mgatewayChildren = traverse (\gateway -> children graph gateway) (Data.Set.toList gateways)
-  in case mgatewayChildren of
-       Nothing -> Data.Set.fromList []
-       Just xs -> let ys = map head $ filter ((>1) . length) $ group $ sort $ concat xs
-                  in Data.Set.difference (Data.Set.fromList ys) gateways
+dangerousVertices (World gs g _) = S.difference (S.fromList (keepDangerous gatewayChildren)) gs
+  where
+    gatewayChildren :: [Vertex]
+    gatewayChildren = concat $ catMaybes $ fmap (children g) (S.toList gs)
+
+    keepDangerous :: [Vertex] -> [Vertex]
+    keepDangerous = catMaybes . map safeHead . filter ((>1) . length) . group . sort
+
+
+worldBfs2 :: World -> (Vertex -> Bool) -> State GraphSearchState ()
+worldBfs2 world p = do
+  frontiers <- gets mfrontiers
+  case frontiers of
+    []               -> return ()
+    (currentPath:xs) ->
+      case safeLast currentPath of
+        Nothing     -> return ()
+        Just vertex -> do
+          when (p vertex) $
+            -- TODO: use lenses instead of this
+              modify (\s -> GSS (mvisited s) (mfrontiers s) ((mpaths s) ++ [currentPath]))
+          case children (mgraph world) vertex of
+            Nothing -> return ()
+            Just us -> do
+              vis <- gets mvisited
+              let newVisited = S.insert vertex vis
+              let newFrontiers =
+                    nub $
+                    filter (not . null) $
+                    (xs ++) $ map (\v -> currentPath ++ [v]) $
+                    filter (not . (`member` (S.union (mgateways world) newVisited))) $
+                    us
+              modify (\s -> GSS newVisited newFrontiers (mpaths s))
+              worldBfs2 world p
+
+childrenInGateways :: World -> Vertex -> Bool
+childrenInGateways (World gateways graph _) v =
+  case children graph v of
+    Nothing -> False
+    Just xs -> any (`member` gateways) xs
+
+distance :: World -> Path -> Int
+distance world = length . filter (not . (childrenInGateways world))
+
+-- TODO: improve
+-- Better name + better function composition
+mapping :: World -> Map Vertex ([Path], Set Gateway)
+mapping world@(World gateways graph _) = m'
+  where ds = dangerousVertices world
+        st = runWorldBfs2 world (`member` ds)
+        m = fromListWith (++) [(last path, [path]) | path <- mpaths st]
+        m' = M.mapWithKey (\k paths -> case children graph k of
+                                         Nothing -> (paths, S.fromList [])
+                                         Just xs -> (paths, Data.Set.intersection (Data.Set.fromList xs) gateways)) m
+
+pickAction :: World -> Maybe Action
+pickAction world@(World gateways graph position)
+  | childrenInGateways world position = do
+      cs <- children graph position
+      g <- find (`member` gateways) cs
+      return $ Sever (position, g)
+  | otherwise = case sortedAssocs of
+                  []               -> safeHead $ generatePlayerActions world
+                  ((k, (_, gs)):_) -> Just $ Sever (k, head (S.toList gs))
+        where
+          sortedAssocs :: [(Vertex, ([Path], Set Gateway))]
+          sortedAssocs = sortBy (comparing (\(_, (paths, gs)) -> (minimum (map (distance world) paths)) - (length gs))) $ M.assocs (mapping world)

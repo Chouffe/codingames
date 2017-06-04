@@ -5,11 +5,13 @@ module SkynetRevolution2Spec (spec) where
 import           Data.List         (intersperse)
 import qualified Data.Map          as M
 import qualified Data.Set          as S
-import           SkynetRevolution2 (Gateway, Graph, Link, Position, Turn (..),
-                                    Vertex, World (..), dangerousVertices,
-                                    makeGraph, nextTurn, parseGameInput,
+import           SkynetRevolution2 (Action (..), Gateway, Graph, Link, Position,
+                                    Turn (..), Vertex, World (..),
+                                    dangerousVertices, distance, makeGraph,
+                                    nextTurn, parseGameInput,
                                     parseGameLinksAndGateways, parseGateway,
-                                    parseLink, parseNetwork, safeHead, safeLast)
+                                    parseLink, parseNetwork, performAction,
+                                    pickAction, safeHead, safeLast)
 import           Test.Hspec
 import           Test.QuickCheck
 
@@ -132,12 +134,78 @@ spec =
     describe "remainingSeparableLinks" $ do
       it "finds all separable links" pending
 
-    describe "dangerousVertices" $
+    describe "dangerousVertices" $ do
       mapM_ (\(i, position, expected) -> dangerousVertexSpec i position expected) $
         [ (1, 0, [3])
         , (2, 0, [1, 2])
         , (3, 0, [6])
         , (4, 0, [1, 6, 7])
-        , (5, 0, [17, 27])
+        , (5, 2, [17, 27])
         , (6, 0, [3, 20, 5, 33, 40, 47, 27])
         ]
+
+      describe "spec 2" $ do
+        it "finds the correct dangerous vertex" $ do
+          mworld <- getWorld 2 0
+          case mworld of
+            Nothing    -> fail "could not parse"
+            Just world ->
+              let newWorld = performAction (Move 9) $ performAction (Sever (1, 3)) world
+              in do
+                dangerousVertices newWorld `shouldBe` S.fromList [2]
+
+
+    describe "distance" $ do
+      describe "spec 5" $ do
+        it "returns a distance of 2" $ do
+          mworld <- getWorld 5 0
+          case mworld of
+            Nothing    -> fail "could not parse"
+            Just world -> (distance world [2, 3, 19, 17]) `shouldBe` 2
+
+        it "returns a distance of 1" $ do
+          mworld <- getWorld 5 0
+          case mworld of
+            Nothing    -> fail "could not parse"
+            Just world -> (distance world [2, 1, 7, 9, 13, 15, 23, 27]) `shouldBe` 1
+
+      describe "spec 6" $ do
+        it "returns a distance of 1" $ do
+          mworld <- getWorld 6 0
+          case mworld of
+            Nothing    -> fail "could not parse"
+            Just world -> (distance world [0, 13, 14, 15, 19, 20]) `shouldBe` 1
+
+      -- describe "runWorldBfs2" $ do
+      --   describe "spec 2" $ do
+      --     it "returns correct mpaths" $ do
+      --       mworld <- getWorld 2 0
+      --       case mworld of
+      --         Nothing    -> fail "could not parse"
+      --         Just world -> runWorldBfs2 worldpickAction world `shouldBe` Just (Sever (1, 3))
+
+      describe "pickAction" $ do
+        describe "spec 2" $ do
+          it "returns Sever (1, 3)" $ do
+            mworld <- getWorld 2 0
+            case mworld of
+              Nothing    -> fail "could not parse"
+              Just world -> pickAction world `shouldBe` Just (Sever (1, 3))
+          it "returns Sever (2, 5)" $ do
+            mworld <- getWorld 2 0
+            case mworld of
+              Nothing    -> fail "could not parse"
+              Just world -> pickAction (performAction (Sever (1, 3)) world) `shouldBe` Just (Sever (2, 5))
+
+        describe "spec 5" $ do
+          it "returns Sever (27, 16)" $ do
+            mworld <- getWorld 5 0
+            case mworld of
+              Nothing    -> fail "could not parse"
+              Just world -> pickAction world `shouldBe` Just (Sever (27, 16))
+
+          it "returns Sever (17, 16)" $ do
+            mworld <- getWorld 5 0
+            case mworld of
+              Nothing    -> fail "could not parse"
+              Just world -> pickAction (performAction (Sever (27, 16)) world) `shouldBe` Just (Sever (17, 16))
