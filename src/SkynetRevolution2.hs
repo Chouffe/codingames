@@ -3,6 +3,7 @@
 
 module SkynetRevolution2 where
 
+import           Control.Applicative              ((<|>))
 import           Control.Monad
 import           Control.Monad.Trans.State.Strict
 import           Data.Function                    (on)
@@ -19,8 +20,6 @@ import           Data.Set                         (Set, fromList, insert,
 import qualified Data.Set                         as S
 -- import           Debug.Trace                      (trace)
 import           System.IO
-
--- TODO: Cleanup
 
 -- utils
 
@@ -83,12 +82,17 @@ playerLost :: World -> Bool
 playerLost world = (magent world) `elem` (mgateways world)
 
 generateAgentActions :: World -> [Action]
-generateAgentActions world = case children (mgraph world) (magent world) of
-                               Nothing -> []
-                               Just xs -> (fmap Move xs)
+generateAgentActions world =
+  case children (mgraph world) (magent world) of
+    Nothing -> []
+    Just xs -> (fmap Move xs)
 
 generatePlayerActions :: World -> [Action]
 generatePlayerActions world = fmap Sever $ remainingSeparableLinks world
+
+performAction :: Action -> World -> World
+performAction (Move to)    world = World (mgateways world) (mgraph world) to
+performAction (Sever link) world = World (mgateways world) (severLink (mgraph world) link) (magent world)
 
 generateGameTree :: Turn -> World -> GameTree
 generateGameTree turn world
@@ -147,11 +151,6 @@ playerPolicy world gameTreeMap = case msortedActions of
         msortedActions = traverse (\a -> case Data.Map.lookup a gameTreeMap of
                                            Nothing -> Nothing
                                            Just x  -> Just (a, x)) sortedActions
-
-performAction :: Action -> World -> World
-performAction (Move to)    world = World (mgateways world) (mgraph world) to
-performAction (Sever link) world = World (mgateways world) (severLink (mgraph world) link) (magent world)
-
 pickPlayerAction :: Int -> GameTree -> Maybe Action
 pickPlayerAction depth (Node Player world gameTreeMap) =
   fmap fst $ find snd $ fmap (fmap (safeGameTree depth)) $ playerPolicy world gameTreeMap
@@ -175,14 +174,16 @@ makeGraph links =
 
 severLink :: Graph -> Link -> Graph
 severLink graph (i, o) = cutLink i o $ cutLink o i graph
-  where cutLink input output g = updateWithKey (\_ links -> case delete input links of
+  where
+    cutLink :: Vertex -> Vertex -> Graph -> Graph
+    cutLink input output g = updateWithKey (\_ links -> case delete input links of
                                                               [] -> Nothing
                                                               xs -> Just xs) output g
 
 children :: Graph -> Vertex -> Maybe [Vertex]
 children graph v = Data.Map.lookup v graph
 
--- Game Logic
+-- Graph Search: BFS
 
 initGraphSearchState :: Vertex -> GraphSearchState
 initGraphSearchState v = GSS
@@ -264,44 +265,6 @@ parseGameInput _ = Nothing
 parseGameLoop :: String -> Maybe Position
 parseGameLoop = parsePosition
 
-debugGameInput :: Graph -> Set Gateway -> IO ()
-debugGameInput graph gateways = do
-  hPutStrLn stderr (show graph)
-  hPutStrLn stderr (show gateways)
-
-main :: IO ()
-main = do
-    hSetBuffering stdout NoBuffering -- DO NOT REMOVE
-
-    mnetwork <- fmap parseNetwork getLine
-    case mnetwork of
-      Nothing -> return ()                     -- Parsing failed
-      Just (_, l, e) -> do
-        ls <- replicateM l getLine
-        gs <- replicateM e getLine
-        case parseGameLinksAndGateways ls gs of
-          Nothing                -> return ()  -- Parsing failed
-          Just (graph, gateways) -> gameLoop graph gateways
-
-
-gameLoop :: Graph -> Set Gateway -> IO ()
-gameLoop graph gateways = do
-  mposition <- fmap parseGameLoop getLine
-  case mposition of
-    Nothing       -> hPutStrLn stderr "Parsing failed" >> return ()                 -- Parsing failed
-    Just position ->
-      let world = (World gateways graph position)
-          -- gameTree = generateGameTree Player world
-      in case pickAction world of
-           Just action@(Sever (i, o)) -> do
-             putStrLn $ show i ++ " " ++ show o
-             gameLoop (mgraph (performAction action world)) gateways
-           _ -> hPutStrLn stderr "No action found..." >> return ()
-      -- in case pickPlayerAction 3 gameTree of
-      --      Just action@(Sever (i, o)) -> do
-      --        putStrLn $ show i ++ " " ++ show o
-      --        gameLoop ref (mgraph (performAction action world)) gateways
-      --      _ -> hPutStrLn stderr "No action found..." >> return ()
 
 -- Second attempt
 
@@ -350,26 +313,92 @@ childrenInGateways (World gateways graph _) v =
 distance :: World -> Path -> Int
 distance world = length . filter (not . (childrenInGateways world))
 
--- TODO: improve
--- Better name + better function composition
-mapping :: World -> Map Vertex ([Path], Set Gateway)
-mapping world@(World gateways graph _) = m'
-  where ds = dangerousVertices world
-        st = runWorldBfs2 world (`member` ds)
-        m = fromListWith (++) [(last path, [path]) | path <- mpaths st]
-        m' = M.mapWithKey (\k paths -> case children graph k of
-                                         Nothing -> (paths, S.fromList [])
-                                         Just xs -> (paths, Data.Set.intersection (Data.Set.fromList xs) gateways)) m
+dangerousVerticesMapping :: World -> Map Vertex ([Path], Set Gateway)
+dangerousVerticesMapping world@(World gateways graph _) =
+  M.mapWithKey (\k paths -> case children graph k of
+                                     Nothing -> (paths, S.fromList [])
+                                     Just xs -> (paths, Data.Set.intersection (Data.Set.fromList xs) gateways)) (pathsToVertex dangerSet)
+
+  where
+    dangerSet :: Set Vertex
+    dangerSet = dangerousVertices world
+
+    pathsTo :: Set Vertex -> [Path]
+    pathsTo set = mpaths $ runWorldBfs2 world (`member` set)
+
+    pathsToVertex :: Set Vertex -> Map Vertex [Path]
+    pathsToVertex set = fromListWith (++) [(last path, [path]) | path <- (pathsTo set)]
+
+pickActionFromAdjacentGateways :: World -> Maybe Action
+pickActionFromAdjacentGateways (World gs g pos) = do
+  cs <- children g pos
+  e <- find (`member` gs) cs
+  return $ Sever (pos, e)
+
+pickActionFromDangerousVertices :: World -> Maybe Action
+pickActionFromDangerousVertices world =
+  case sortAssocs (M.assocs (dangerousVerticesMapping world)) of
+    []               -> Nothing
+    ((k, (_, gs)):_) -> Just $ Sever (k, head (S.toList gs))
+
+  where
+    sortAssocs :: [(Vertex, ([Path], Set Gateway))] -> [(Vertex, ([Path], Set Gateway))]
+    sortAssocs = sortBy (comparing (uncurry heuristic . snd))
+
+    heuristic :: [Path] -> Set Gateway -> Int
+    heuristic ps gs = minimum (map (distance world) ps) - length gs
+
+pickActionFromRemainingActions :: World -> Maybe Action
+pickActionFromRemainingActions world = safeHead $ generatePlayerActions world
 
 pickAction :: World -> Maybe Action
-pickAction world@(World gateways graph position)
-  | childrenInGateways world position = do
-      cs <- children graph position
-      g <- find (`member` gateways) cs
-      return $ Sever (position, g)
-  | otherwise = case sortedAssocs of
-                  []               -> safeHead $ generatePlayerActions world
-                  ((k, (_, gs)):_) -> Just $ Sever (k, head (S.toList gs))
-        where
-          sortedAssocs :: [(Vertex, ([Path], Set Gateway))]
-          sortedAssocs = sortBy (comparing (\(_, (paths, gs)) -> (minimum (map (distance world) paths)) - (length gs))) $ M.assocs (mapping world)
+pickAction world@(World _ _ position)
+  | childrenInGateways world position = pickActionFromAdjacentGateways world
+  | otherwise = pickActionFromDangerousVertices world <|> pickActionFromRemainingActions world
+
+-- Main Game Loop
+
+debugGameInput :: Graph -> Set Gateway -> IO ()
+debugGameInput graph gateways = do
+  hPutStrLn stderr (show graph)
+  hPutStrLn stderr (show gateways)
+
+parsingFailed :: IO ()
+parsingFailed = hPutStrLn stderr "Parsing failed..."
+
+pickActionFailed :: IO ()
+pickActionFailed = hPutStrLn stderr "No action found..."
+
+main :: IO ()
+main = do
+    hSetBuffering stdout NoBuffering -- DO NOT REMOVE
+
+    mnetwork <- fmap parseNetwork getLine
+    case mnetwork of
+      Nothing -> parsingFailed >> return ()
+      Just (_, l, e) -> do
+        ls <- replicateM l getLine
+        gs <- replicateM e getLine
+        case parseGameLinksAndGateways ls gs of
+          Nothing                -> parsingFailed >> return ()
+          Just (graph, gateways) -> gameLoop graph gateways
+
+gameLoop :: Graph -> Set Gateway -> IO ()
+gameLoop graph gateways = do
+  mposition <- fmap parseGameLoop getLine
+  case mposition of
+    Nothing       -> parsingFailed >> return ()
+    Just position ->
+      let world = (World gateways graph position)
+      -- First attempt
+          -- gameTree = generateGameTree Player world
+      -- in case pickPlayerAction 3 gameTree of
+      --      Just action@(Sever (i, o)) -> do
+      --        putStrLn $ show i ++ " " ++ show o
+      --        gameLoop ref (mgraph (performAction action world)) gateways
+      --      _ -> hPutStrLn stderr "No action found..." >> return ()
+      in case pickAction world of
+           Just action@(Sever (i, o)) -> do
+             putStrLn $ show i ++ " " ++ show o
+             gameLoop (mgraph (performAction action world)) gateways
+           _ -> pickActionFailed >> return ()
