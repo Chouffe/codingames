@@ -9,8 +9,8 @@ gameSpec :: Int -> Spec
 gameSpec i =
   describe ("Game Spec: " ++ show i) $
     it "should pass" $ do
-      testInput <- readFile $ "test/input/warspec_" ++ show i ++ ".txt"
-      testOutput <- readFile $ "test/output/warspec_" ++ show i ++ ".txt"
+      testInput <- readFile $ "test/input/war/warspec_" ++ show i ++ ".txt"
+      testOutput <- readFile $ "test/output/war/warspec_" ++ show i ++ ".txt"
       case parseDecks (lines testInput) of
         Nothing             -> return ()
         Just (d1, d2) ->

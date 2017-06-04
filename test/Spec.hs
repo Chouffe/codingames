@@ -6,5 +6,5 @@ import qualified WarSpec
 
 main :: IO ()
 main = hspec $ do
-  WarSpec.spec
-  -- SkynetRevolution2Spec.spec
+  -- WarSpec.spec
+  SkynetRevolution2Spec.spec

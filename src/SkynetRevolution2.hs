@@ -140,7 +140,7 @@ playerPolicy world gameTreeMap = case msortedActions of
                                    Nothing -> assocs gameTreeMap
                                    Just xs -> nub (xs ++ assocs gameTreeMap)
   where paths = mpaths (runWorldBfs world)
-        values = fmap (\path -> (length path, safeLast path, pathToLink path)) paths
+        values = fmap (\path -> (length path, safeLast (reverse (drop 1 (reverse path))), pathToLink path)) paths
         values' = fmap (\(a,b,c) -> (a, fromJust b, fromJust c)) $ filter (\(_,b,c) -> isJust b && isJust c) values
         values'' = sortBy (\(x1,y1,_) (x2,y2,_) -> compare (x1, y1) (x2, y2)) values'
         groupedValues = groupBy (\(x1, y1, _) (x2, y2, _) -> (x1, y1) == (x2, y2)) values''
@@ -247,11 +247,18 @@ parsePosition position =
       [(pos, _)] -> Just pos
       _          -> Nothing
 
-parseGameInput :: [String] -> [String] -> Maybe (Graph, Set Gateway)
-parseGameInput links gateways = do
+parseGameLinksAndGateways :: [String] -> [String] -> Maybe (Graph, Set Gateway)
+parseGameLinksAndGateways links gateways = do
     l <- traverse parseLink links
     g <- traverse parseGateway gateways
     return (makeGraph l, Data.Set.fromList g)
+
+parseGameInput :: [String] -> Maybe (Int, Int, Int, Graph, Set Gateway)
+parseGameInput (network:content) = do
+  (n, l, e) <- parseNetwork network
+  (graph, gateways) <- parseGameLinksAndGateways (take l content) (drop l content)
+  return (n, l, e, graph, gateways)
+parseGameInput _ = Nothing
 
 parseGameLoop :: String -> Maybe Position
 parseGameLoop = parsePosition
@@ -268,15 +275,22 @@ main = do
     mnetwork <- fmap parseNetwork getLine
     case mnetwork of
       Nothing -> return ()                     -- Parsing failed
-      Just (_, l, e) -> do
+      Just (n, l, e) -> do
         ls <- replicateM l getLine
         gs <- replicateM e getLine
-        case parseGameInput ls gs of
+        case parseGameLinksAndGateways ls gs of
           Nothing                -> return ()  -- Parsing failed
-          Just (graph, gateways) -> gameLoop graph gateways
+          Just (graph, gateways) -> gameLoop ((n, l, e), ls, gs) graph gateways
 
-gameLoop :: Graph -> Set Gateway -> IO ()
-gameLoop graph gateways = do
+debugInput :: ((Int, Int, Int), [String], [String]) -> IO ()
+debugInput ((n, l, e), ls, gs) = do
+  hPutStrLn stderr $ show n ++ " " ++ show l ++ " " ++ show e
+  mapM_ (hPutStrLn stderr) ls
+  mapM_ (hPutStrLn stderr) gs
+
+gameLoop :: ((Int, Int, Int), [String], [String]) -> Graph -> Set Gateway -> IO ()
+gameLoop ref graph gateways = do
+  debugInput ref
   mposition <- fmap parseGameLoop getLine
   case mposition of
     Nothing       -> hPutStrLn stderr "Parsing failed" >> return ()                 -- Parsing failed
@@ -286,7 +300,7 @@ gameLoop graph gateways = do
       in case pickPlayerAction 3 gameTree of
            Just action@(Sever (i, o)) -> do
              putStrLn $ show i ++ " " ++ show o
-             gameLoop (mgraph (performAction action world)) gateways
+             gameLoop ref (mgraph (performAction action world)) gateways
            _ -> hPutStrLn stderr "No action found..." >> return ()
 
 -- Tests
