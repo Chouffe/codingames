@@ -3,15 +3,17 @@ module SkynetRevolution2 where
 import           Control.Monad
 import           Control.Monad.Trans.State.Strict
 import           Data.Function                    (on)
-import           Data.List                        (delete, find, groupBy, nub,
-                                                   null, sortBy)
+import           Data.List                        (delete, find, group, groupBy,
+                                                   nub, null, sort, sortBy)
 import           Data.Map                         (Map, assocs, empty, fromList,
                                                    fromListWith, insert, lookup,
                                                    updateWithKey)
+import qualified Data.Map                         as M
 import           Data.Maybe                       (fromJust, isJust)
 import           Data.Ord                         (comparing)
-import           Data.Set                         (Set, fromList, insert,
-                                                   member, toList)
+import           Data.Set                         (Set, difference, fromList,
+                                                   insert, member, toList)
+import qualified Data.Set                         as S
 import           System.IO
 
 -- TODO:
@@ -319,3 +321,14 @@ testWorld2 = World (Data.Set.fromList [4, 5]) testGraph2 0
 
 testWorld3 :: World
 testWorld3 = World (Data.Set.fromList [3, 5]) testGraph2 0
+
+
+-- Second attempt
+
+dangerousVertices :: World -> Set Vertex
+dangerousVertices (World gateways graph _) =
+  let mgatewayChildren = traverse (\gateway -> children graph gateway) (Data.Set.toList gateways)
+  in case mgatewayChildren of
+       Nothing -> Data.Set.fromList []
+       Just xs -> let ys = map head $ filter ((>1) . length) $ group $ sort $ concat xs
+                  in Data.Set.difference (Data.Set.fromList ys) gateways

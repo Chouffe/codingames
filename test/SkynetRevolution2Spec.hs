@@ -1,40 +1,60 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module SkynetRevolution2Spec where
+module SkynetRevolution2Spec (spec) where
 
 import           Data.List         (intersperse)
 import qualified Data.Map          as M
 import qualified Data.Set          as S
-import           SkynetRevolution2 (Link, Turn (..), Vertex, makeGraph,
-                                    nextTurn, parseGameInput,
+import           SkynetRevolution2 (Gateway, Graph, Link, Position, Turn (..),
+                                    Vertex, World (..), dangerousVertices,
+                                    makeGraph, nextTurn, parseGameInput,
                                     parseGameLinksAndGateways, parseGateway,
                                     parseLink, parseNetwork, safeHead, safeLast)
 import           Test.Hspec
 import           Test.QuickCheck
 
-specPath :: Int -> String
+specPath :: Int -> FilePath
 specPath i = "test/input/skynetrevolution2/spec_" ++ show i ++ ".txt"
+
+getGameInput :: Int -> IO (Maybe (Int, Int, Int, Graph, S.Set Gateway))
+getGameInput i = parseGameInput . lines <$> readFile (specPath i)
+
+getWorld :: Int -> Position -> IO (Maybe World)
+getWorld i pos = do
+  m <- getGameInput i
+  case m of
+    Nothing                         -> return Nothing
+    Just (_, _, _, graph, gateways) -> return $ Just $ World gateways graph pos
 
 parsingSpec :: Int -> Spec
 parsingSpec i =
   describe ("Parsing Spec: " ++ show i) $ do
     it "contains the proper number of gateways" $ do
-      testInput <- readFile $ specPath i
-      case parseGameInput (lines testInput) of
+      gameInput <- getGameInput i
+      case gameInput of
         Nothing                     -> fail "could not parse"
         Just (_, _, e, _, gateways) -> e `shouldBe` (length gateways)
 
     it "contains the proper number of nodes" $ do
-      testInput <- readFile $ specPath i
-      case parseGameInput (lines testInput) of
+      gameInput <- getGameInput i
+      case gameInput of
         Nothing                  -> fail "could not parse"
         Just (n, _, _, graph, _) -> n `shouldBe` (length (M.keys graph))
 
     it "contains the proper number of links" $ do
-      testInput <- readFile $ specPath i
-      case parseGameInput (lines testInput) of
+      gameInput <- getGameInput i
+      case gameInput of
         Nothing                  -> fail "could not parse"
         Just (_, l, _, graph, _) -> 2 * l `shouldBe` (length (concat (M.elems graph)))
+
+dangerousVertexSpec :: Int -> Position -> [Vertex] -> Spec
+dangerousVertexSpec i position expected =
+  describe ("spec " ++ show i) $
+    it "contains the correct dangerous nodes" $ do
+      mworld <- getWorld i position
+      case mworld of
+        Nothing    -> fail "could not parse"
+        Just world -> dangerousVertices world `shouldBe` (S.fromList expected)
 
 spec :: Spec
 spec =
@@ -111,3 +131,13 @@ spec =
 
     describe "remainingSeparableLinks" $ do
       it "finds all separable links" pending
+
+    describe "dangerousVertices" $
+      mapM_ (\(i, position, expected) -> dangerousVertexSpec i position expected) $
+        [ (1, 0, [3])
+        , (2, 0, [1, 2])
+        , (3, 0, [6])
+        , (4, 0, [1, 6, 7])
+        , (5, 0, [17, 27])
+        , (6, 0, [3, 20, 5, 33, 40, 47, 27])
+        ]
