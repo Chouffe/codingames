@@ -1,10 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 
 module VoxCodei where
 
-import qualified Data.List as L
-import qualified Data.Map  as M
-import           Safe      (atMay, headMay)
+import           Control.Lens
+import qualified Data.List    as L
+import qualified Data.Map     as M
+import           Safe         (atMay, headMay)
 
 -- import qualified Data.List as L
 
@@ -25,9 +27,10 @@ data Firewall = Firewall {
     , width  :: Int
     } deriving (Eq)
 
+makeLenses ''Firewall
 
 instance Show Firewall where
-    show (Firewall cells _ w) = unlines $ showRow <$> (makeRows w cells)
+    show (Firewall es _ w) = unlines $ showRow <$> (makeRows w es)
         where
             makeRows :: Int -> [Cell] -> [[Cell]]
             makeRows w' cs = foldl (\rs k -> rs ++ [drop (w' * k) (take (w' * (k + 1)) cs)])
@@ -57,11 +60,13 @@ instance Show Action where
 data Direction = U | D | R | L deriving (Eq, Show)
 
 data GameState = GameState {
-    _firewall      :: Firewall
-  , _bombs         :: [Bomb]  -- Use a set for efficient lookups?
-  , remainingTurns :: Int
-  , remaingBombs   :: Int
+    _firewall       :: Firewall
+  , _bombs          :: [Bomb]  -- Use a set for efficient lookups?
+  , _remainingTurns :: Int
+  , _remaingBombs   :: Int
   } deriving (Eq, Show)
+
+makeLenses ''GameState
 
 data Finished = Lost | Won deriving (Eq, Show)
 
@@ -81,8 +86,8 @@ linearToCartesian _ w l = Position (x', y')
 parseFirewall :: [String] -> Maybe Firewall
 parseFirewall xs = do
     s <- headMay xs
-    cells <- traverse parseCell (concat xs)
-    return $ Firewall cells (length xs) (length s)
+    cs <- traverse parseCell (concat xs)
+    return $ Firewall cs (length xs) (length s)
 
 parseCell :: Char -> Maybe Cell
 parseCell '@' = Just S
@@ -92,44 +97,93 @@ parseCell _   = Nothing
 
 -- Game Logic
 
--- TODO
+-- TODO: write Specs
+-- |It plays one round of the game
 tick :: GameState -> GameState
-tick = id
+tick gst =
+  over bombs ((filter (not . isExplodingBomb)) . map decreaseTTL) $
+  over remainingTurns (\x -> x - 1) $
+  over firewall (explodeBombs (Range 3) (filter isExplodingBomb (_bombs gst))) $
+  gst
+
+  where
+    isExplodingBomb :: Bomb -> Bool
+    isExplodingBomb (Bomb _ (TTL ttl)) = ttl <= 0
+
+    decreaseTTL :: Bomb -> Bomb
+    decreaseTTL (Bomb pos (TTL ttl)) = Bomb pos (TTL (ttl - 1))
+
+    explodeBombs :: Range -> [Bomb] -> Firewall -> Firewall
+    explodeBombs r bs f = foldl (\f' b -> explode (_bombs gst) r b f') f bs
+
+-- TODO
+lost :: GameState -> Bool
+lost = undefined
+
+-- TODO
+won :: GameState -> Bool
+won = undefined
 
 -- TODO: write specs
 explode :: [Bomb] -> Range -> Bomb -> Firewall -> Firewall
-explode bombs range b@(Bomb pos (TTL ttl))
+explode bs range b@(Bomb pos (TTL ttl))
   | ttl > 0 = id
-  | otherwise =
-      explodeDirection bombs' L (shiftPosition pos L) range .
-      explodeDirection bombs' R (shiftPosition pos R) range .
-      explodeDirection bombs' U (shiftPosition pos U) range .
-      explodeDirection bombs' D (shiftPosition pos D) range
-    where bombs' = filter (/= b) bombs
+  | otherwise = forkExplode bombs'
+
+    where
+      bombs' :: [Bomb]
+      bombs' = filter (/= b) bs
+
+      forkExplode :: [Bomb] -> Firewall -> Firewall
+      forkExplode bs' f =
+        explodeDirection bs' L (shiftPosition f L pos) range $
+        explodeDirection bs' R (shiftPosition f R pos) range $
+        explodeDirection bs' U (shiftPosition f U pos) range $
+        explodeDirection bs' D (shiftPosition f D pos) range $ f
 
 explodeDirection :: [Bomb] -> Direction -> (Maybe Position) -> Range -> Firewall -> Firewall
 explodeDirection _ _ _ (Range 0) f = f
 explodeDirection _ _ Nothing _ f = f
-explodeDirection bs d (Just p) (Range k) firewall =
-  case atMay (_cells firewall) (cartesianToLinear (height firewall) (width firewall) p) of
-    Nothing -> firewall
-    Just I -> firewall
-    Just E -> case (shiftPosition p d) of
+explodeDirection bs d (Just p) (Range k) f =
+  case atMay (_cells f) (cartesianToLinear (height f) (width f) p) of
+    Nothing -> f
+    Just I -> f
+    Just E -> case (shiftPosition f d p) of
                  Nothing -> newFirewall
                  pos'    -> explodeDirection bs d pos' (Range (k - 1)) newFirewall
               where newFirewall = case L.find (\(Bomb p' _) -> p' == p) bs of
                                     -- Recursively explode bombs
-                                    Just b -> explode (filter (/= b) bs) (Range 3) b firewall
-                                    Nothing -> firewall
-    Just S -> case shiftPosition p d of
+                                    Just b -> explode (filter (/= b) bs) (Range 3) b f
+                                    Nothing -> f
+    Just S -> case shiftPosition f d p of
                 Nothing -> newFirewall
                 pos'    -> explodeDirection bs d pos' (Range (k - 1)) newFirewall
-              where newFirewall = deleteSurveillanceNodeAt p firewall
+              where newFirewall = deleteSurveillanceNodeAt p f
 
--- TODO
-shiftPosition :: Position -> Direction -> Maybe Position
-shiftPosition pos d = Nothing
+shiftPosition :: Firewall -> Direction -> Position -> Maybe Position
+shiftPosition _ L (Position (x, y))
+  | x <= 0 = Nothing
+  | otherwise = Just $ Position (x - 1, y)
+shiftPosition f R (Position (x, y))
+  | x >= (width f - 1) = Nothing
+  | otherwise = Just $ Position (x + 1, y)
+shiftPosition _ U (Position (x, y))
+  | y <= 0 = Nothing
+  | otherwise = Just $ Position (x, y - 1)
+shiftPosition f D (Position (x, y))
+  | y >= (height f - 1) = Nothing
+  | otherwise = Just $ Position (x, y + 1)
 
--- TODO
 deleteSurveillanceNodeAt :: Position -> Firewall -> Firewall
-deleteSurveillanceNodeAt pos = id
+deleteSurveillanceNodeAt pos f = over cells updateCells f
+  where
+    k :: Int
+    k = cartesianToLinear (height f) (width f) pos
+
+    updateAt :: Int -> Int -> Cell -> Cell
+    updateAt l i c = case (i == l, c) of
+                        (True, S) -> E
+                        _         -> c
+
+    updateCells :: [Cell] -> [Cell]
+    updateCells = zipWith (updateAt k) [0..]
