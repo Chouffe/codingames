@@ -3,10 +3,14 @@
 
 module VoxCodei where
 
+-- import           Control.Arrow
 import           Control.Lens
-import qualified Data.List    as L
-import qualified Data.Map     as M
-import           Safe         (atMay, headMay)
+import           Control.Monad.Trans.State.Strict
+import qualified Data.List                        as L
+import qualified Data.Map                         as M
+import qualified Data.Set                         as S
+import           Safe                             (atMay, headMay)
+
 
 -- import qualified Data.List as L
 
@@ -14,7 +18,6 @@ import           Safe         (atMay, headMay)
 
 -- |A cell is either a surveillance cell, and indestructible cell or empty
 data Cell = S | I | E deriving (Eq)
--- TODO: should we allow bombs on a cell?
 
 instance Show Cell where
     show S = "@"
@@ -40,16 +43,16 @@ instance Show Firewall where
             showRow :: [Cell] -> String
             showRow = concat . fmap show
 
-newtype Position = Position (Int, Int) deriving (Eq)
+newtype Position = Position (Int, Int) deriving (Eq, Ord)
 
 instance Show Position where
     show (Position (x, y)) = show x ++ " " ++ show y
 
-newtype TTL = TTL Int deriving (Eq, Show)
+newtype TTL = TTL Int deriving (Eq, Ord, Show)
 
-data Bomb = Bomb Position TTL deriving (Eq, Show)
+data Bomb = Bomb Position TTL deriving (Eq, Ord, Show)
 
-data Action = B Bomb | W deriving (Eq)
+data Action = B Bomb | W deriving (Eq, Ord)
 
 newtype Range = Range Int deriving (Eq, Show)
 
@@ -71,7 +74,7 @@ makeLenses ''GameState
 data Finished = Lost | Won deriving (Eq, Show)
 
 data GameTree = Leaf Finished
-              | Node GameState (M.Map Action GameState)
+              | Node GameState (M.Map Action GameTree)
               deriving (Eq, Show)
 
 cartesianToLinear :: Int -> Int -> Position -> Int
@@ -97,6 +100,52 @@ parseCell _   = Nothing
 
 -- Game Logic
 
+-- TODO
+-- TODO: write Specs
+generateActions :: GameState -> S.Set Action
+generateActions gst = S.union (S.fromList (fmap bombAction (emptyPositions gst)))
+                              (S.fromList [W])
+  where
+    emptyPositions :: GameState -> [Position]
+    emptyPositions _ = [] -- TODO: filter out bombs
+
+    bombAction :: Position -> Action
+    bombAction pos = B $ Bomb pos (TTL 3)
+
+-- TODO
+rank :: GameState -> S.Set Action -> [Action]
+rank = const S.toList
+
+-- TODO: Implement some greedy heuristic to pick the best Bomb positions
+
+newtype Path = Path [Action] deriving (Eq, Show)
+
+isWinningPath :: Path -> Bool
+isWinningPath = undefined
+
+data TreeSearchState = TSS { path :: Path }
+  deriving (Eq, Show)
+
+-- TODO
+dfs :: GameTree -> State TreeSearchState ()
+dfs = undefined
+
+-- TODO: write Specs
+wait :: GameState -> GameState
+wait = over remainingTurns (\x -> x - 1)
+
+-- TODO: write Specs
+performAction :: Action -> GameState -> GameState
+performAction W        = tick . wait
+performAction (B bomb) = tick . over bombs (bomb:)
+
+-- TODO: write Specs
+gameTree :: GameState -> GameTree
+gameTree gst
+  | lost gst  = Leaf Lost
+  | won gst   = Leaf Won
+  | otherwise = Node gst (M.fromList [(action, gameTree (performAction action gst)) | action <- S.toList (generateActions gst)])
+
 -- TODO: write Specs
 -- |It plays one round of the game
 tick :: GameState -> GameState
@@ -116,13 +165,30 @@ tick gst =
     explodeBombs :: Range -> [Bomb] -> Firewall -> Firewall
     explodeBombs r bs f = foldl (\f' b -> explode (_bombs gst) r b f') f bs
 
--- TODO
+-- TODO: write specs
 lost :: GameState -> Bool
-lost = undefined
+lost gst = (noGameTurns gst) || (noBombs gst && remainingSurveillanceNodes gst)
+  -- TODO: how can I write something like the following? -- more elegant
+  -- noGameTurns ||| (noBombs &&& remainingSurveillanceNodes)
+  where
+    noGameTurns :: GameState -> Bool
+    noGameTurns = (<=0) . _remainingTurns
 
--- TODO
+    noBombs :: GameState -> Bool
+    noBombs gst' = length (_bombs gst') == 0 && _remaingBombs gst' == 0
+
+    remainingSurveillanceNodes :: GameState -> Bool
+    remainingSurveillanceNodes = any (==S) . view (firewall . cells)
+
+-- TODO: write specs
 won :: GameState -> Bool
-won = undefined
+won gst = (noSurveillanceNodes gst) && (remaingGameTurns gst)
+  where
+    remaingGameTurns :: GameState -> Bool
+    remaingGameTurns = (>=0) . _remainingTurns
+
+    noSurveillanceNodes :: GameState -> Bool
+    noSurveillanceNodes = all (/=S) . view (firewall . cells)
 
 -- TODO: write specs
 explode :: [Bomb] -> Range -> Bomb -> Firewall -> Firewall
