@@ -4,6 +4,20 @@ This repo contains my solutions to the practices and challenges available at www
 
 The goal is to practice my Haskell and have some fun in the process.
 
+## Practices
+
+### Solved
+
+- Descent
+- ShadowsOfTheKnight
+- SkynetRevolution
+- SkynetRevolution2
+- War
+
+### WIP
+
+- VoxCodei
+
 ## REPL
 
 To fire up a REPL run the following command:
