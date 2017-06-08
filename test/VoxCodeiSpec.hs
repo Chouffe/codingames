@@ -2,13 +2,24 @@
 
 module VoxCodeiSpec (spec) where
 
-import qualified Data.List       as L
+import           Control.Lens
+import qualified Data.List    as L
+import qualified Data.Set     as S
 import           Test.Hspec
-import           Test.QuickCheck
+-- import           Test.QuickCheck
 import           VoxCodei
 
 specPath :: Int -> FilePath
 specPath i = "test/input/voxcodei/spec_" ++ show i ++ ".txt"
+
+updateNodeWith :: Cell -> Cell -> Firewall -> Firewall
+updateNodeWith c c' = over cells (fmap (\e -> if e == c then c' else e))
+
+removeSurveillanceNodes :: Firewall -> Firewall
+removeSurveillanceNodes = updateNodeWith S E
+
+replaceWithIndestructibleNodes :: Firewall -> Firewall
+replaceWithIndestructibleNodes = updateNodeWith S I
 
 getFirewall :: Int -> IO (Maybe Firewall)
 getFirewall i = parseFirewall . lines <$> readFile (specPath i)
@@ -20,6 +31,12 @@ parsingSpec i =
       content <- readFile $ specPath i
       show <$> parseFirewall (lines content) `shouldBe` Just content
 
+withSpecFirewall :: Int -> String -> (Firewall -> Expectation) -> Spec
+withSpecFirewall i title handler =
+  describe ("spec " ++ show i) $ do
+    it title $ do
+      mfirewall <- getFirewall i
+      maybe (fail ("could not parse spec " ++ show i)) handler mfirewall
 
 spec :: Spec
 spec = describe "VoxCodei" $ do
@@ -28,86 +45,123 @@ spec = describe "VoxCodei" $ do
 
   describe "shiftPosition" $ do
     describe "UP" $ do
-      it "shifts up" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall U (Position (0, 1)) `shouldBe` Just (Position (0, 0))
+      withSpecFirewall 1 "shifts up"
+        (\f -> shiftPosition f U (position 0 1) `shouldBe` Just (position 0 0))
 
-      it "fails to shift Up" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall U (Position (0, 0)) `shouldBe` Nothing
+      withSpecFirewall 1 "fails to shift up"
+        (\f -> shiftPosition f U (position 0 0) `shouldBe` Nothing)
 
     describe "DOWN" $ do
-      it "shifts down" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall D (Position (0, 0)) `shouldBe` Just (Position (0, 1))
+      withSpecFirewall 1 "shifts down"
+        (\f -> shiftPosition f D (position 0 0) `shouldBe` Just (position 0 1))
 
-      it "fails to shift Down" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall D (Position (0, 2)) `shouldBe` Nothing
+      withSpecFirewall 1 "fails to shift down"
+        (\f -> shiftPosition f D (position 0 2) `shouldBe` Nothing)
 
     describe "LEFT" $ do
-      it "shifts left" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall L (Position (1, 0)) `shouldBe` Just (Position (0, 0))
+      withSpecFirewall 1 "shifts left"
+        (\f -> shiftPosition f L (position 1 0) `shouldBe` Just (position 0 0))
 
-      it "fails to shift Left" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall L (Position (0, 0)) `shouldBe` Nothing
+      withSpecFirewall 1 "fails to shift left"
+        (\f -> shiftPosition f L (position 0 0) `shouldBe` Nothing)
 
     describe "RIGHT" $ do
-      it "shifts right" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall R (Position (2, 0)) `shouldBe` Just (Position (3, 0))
+      withSpecFirewall 1 "shifts right"
+        (\f -> shiftPosition f R (position 2 0) `shouldBe` Just (position 3 0))
 
-      it "fails to shift Right" $ do
-        mfirewall <- getFirewall 1
-        case mfirewall of
-          Nothing -> fail "could not parse spec 1"
-          Just firewall -> shiftPosition firewall R (Position (3, 0)) `shouldBe` Nothing
+      withSpecFirewall 1 "fails to shift right"
+        (\f -> shiftPosition f R (position 3 0) `shouldBe` Nothing)
 
   describe "deleteSurveillanceNodeAt" $ do
-    it "deletes the surveillance node" $ do
-      mfirewall <- getFirewall 1
-      case mfirewall of
-        Nothing -> fail "could not parse spec 1"
-        Just firewall -> L.find (== S) (_cells firewall') `shouldBe` Nothing
-                         where firewall' = deleteSurveillanceNodeAt (Position (1, 1)) firewall
+    withSpecFirewall 1 "deletes the surveillance node"
+      (\f -> let f' = deleteSurveillanceNodeAt (position 1 1) f
+             in L.find (== S) (_cells f') `shouldBe` Nothing)
 
-    it "does not delete the surveillance node" $ do
-      mfirewall <- getFirewall 1
-      case mfirewall of
-        Nothing -> fail "could not parse spec 1"
-        Just firewall -> L.find (== S) (_cells firewall') `shouldBe` Just S
-                         where firewall' = deleteSurveillanceNodeAt (Position (0, 0)) firewall
+    withSpecFirewall 1 "does not delete the surveillance node"
+      (\f -> let f' = deleteSurveillanceNodeAt (position 0 0) f
+             in L.find (== S) (_cells f') `shouldBe` Just S)
 
-  -- TODO
   describe "explode" $ do
     describe "node type" $ do
-      it "does explode a surveillance node" $ pending
-      it "does not exploed indestructible nodes" $ pending
+      describe "Surveillance Nodes" $ do
+        withSpecFirewall 1 "it does explode a surveillance node"
+          (\f -> explode S.empty (range 3) (bomb (position 0 1) (ttl 0)) f
+                   `shouldBe` (removeSurveillanceNodes f))
 
+        withSpecFirewall 1 "it does not explode a surveillance node - ttl = 0"
+          (\f -> explode S.empty (range 3) (bomb (position 0 0) (ttl 0)) f `shouldBe` f)
+
+        withSpecFirewall 1 "it does not explode a surveillance node because ttl > 0"
+          (\f -> explode S.empty (range 3) (bomb (position 0 1) (ttl 1)) f `shouldBe` f)
+
+      describe "Indestructible Nodes" $ do
+        withSpecFirewall 1 "it does not explode an indestructible node from UP"
+          (\f -> let f' = replaceWithIndestructibleNodes f
+                 in explode S.empty (range 3) (bomb (position 1 0) (ttl 0)) f' `shouldBe` f')
+
+        withSpecFirewall 1 "it does not explode an indestructible node from LEFT"
+          (\f -> let f' = replaceWithIndestructibleNodes f
+                 in explode S.empty (range 3) (bomb (position 0 1) (ttl 0)) f' `shouldBe` f')
+
+        withSpecFirewall 1 "it does not explode an indestructible node from DOWN"
+          (\f -> let f' = replaceWithIndestructibleNodes f
+                 in explode S.empty (range 3) (bomb (position 1 2) (ttl 0)) f' `shouldBe` f')
+
+        withSpecFirewall 1 "it does not explode an indestructible node from RIGHT"
+          (\f -> let f' = replaceWithIndestructibleNodes f
+                 in explode S.empty (range 3) (bomb (position 2 1) (ttl 0)) f' `shouldBe` f')
+
+    -- TODO
     describe "Range of the explosion" $ do
       it "propagates 3 nodes Up" $ pending
       it "propagates 3 nodes Down" $ pending
       it "propagates 3 nodes Left" $ pending
       it "propagates 3 nodes Right" $ pending
 
-    describe "Recurive explosion" $ do
-      it "explodes another bomb" $ pending
+      withSpecFirewall 4 "propagates in all directions" $ do
+        (\f -> explode S.empty (range 3) (bomb (position 1 1) (ttl 0)) f
+          `shouldBe` (removeSurveillanceNodes f))
+
+    describe "Recursive explosions" $ do
+      withSpecFirewall 1 "explodes another bomb from RIGHT side"
+        (\f -> explode (S.fromList [(bomb (position 0 1) (ttl 3))])
+                       (range 3)
+                       (bomb (position 0 3) (ttl 0))
+                       f
+          `shouldBe` (removeSurveillanceNodes f))
+
+      withSpecFirewall 1 "explodes another bomb from LEFT side"
+        (\f -> explode (S.fromList [(bomb (position 0 1) (ttl 3))])
+                       (range 3)
+                       (bomb (position 0 0) (ttl 0))
+                       f
+          `shouldBe` (removeSurveillanceNodes f))
+
+      withSpecFirewall 1 "explodes another bomb from UP side"
+        (\f -> explode (S.fromList [(bomb (position 0 1) (ttl 3))])
+                       (range 3)
+                       (bomb (position 0 0) (ttl 0))
+                       f
+          `shouldBe` (removeSurveillanceNodes f))
+
+      withSpecFirewall 1 "explodes another bomb from DOWN side"
+        (\f -> explode (S.fromList [(bomb (position 0 1) (ttl 3))])
+                       (range 3)
+                       (bomb (position 0 2) (ttl 0))
+                       f
+          `shouldBe` (removeSurveillanceNodes f))
+
+      withSpecFirewall 1 "explosion chain"
+        (\f -> explode (S.fromList [ (bomb (position 3 0) (ttl 3))
+                                   , (bomb (position 3 2) (ttl 3))
+                                   , (bomb (position 2 2) (ttl 3))
+                                   , (bomb (position 2 1) (ttl 3))
+                                   ])
+                       (range 3)
+                       (bomb (position 0 0) (ttl 0))
+                       f
+          `shouldBe` (removeSurveillanceNodes f))
+
       it "does not explode bombs that are too far away" $ pending
 
   -- TODO

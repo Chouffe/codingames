@@ -8,6 +8,7 @@ import           Control.Lens
 import           Control.Monad.Trans.State.Strict
 import qualified Data.List                        as L
 import qualified Data.Map                         as M
+import           Data.Maybe                       (catMaybes)
 import qualified Data.Set                         as S
 import           Safe                             (atMay, headMay)
 
@@ -16,7 +17,10 @@ import           Safe                             (atMay, headMay)
 
 -- Data Modeling
 
--- |A cell is either a surveillance cell, and indestructible cell or empty
+-- |A cell is either a
+-- | S: Surveillance cell
+-- | I: Indestructible cell
+-- | E: empty cell
 data Cell = S | I | E deriving (Eq)
 
 instance Show Cell where
@@ -25,10 +29,13 @@ instance Show Cell where
     show E = "."
 
 data Firewall = Firewall {
-     _cells  :: [Cell]
+     _cells  :: [Cell]  -- linearIndex to Cell, should we use a Map Position Cell?
     , height :: Int
     , width  :: Int
     } deriving (Eq)
+
+makeFirewall :: [Cell] -> Int -> Int -> Firewall
+makeFirewall cs h w = Firewall cs h w
 
 makeLenses ''Firewall
 
@@ -45,16 +52,32 @@ instance Show Firewall where
 
 newtype Position = Position (Int, Int) deriving (Eq, Ord)
 
+position :: Int -> Int -> Position
+position x y = Position (x, y)
+
 instance Show Position where
     show (Position (x, y)) = show x ++ " " ++ show y
 
 newtype TTL = TTL Int deriving (Eq, Ord, Show)
 
+ttl :: Int -> TTL
+ttl x
+  | x <= 0 = TTL 0
+  | otherwise = TTL x
+
 data Bomb = Bomb Position TTL deriving (Eq, Ord, Show)
+
+bomb :: Position -> TTL -> Bomb
+bomb pos t = (Bomb pos t)
 
 data Action = B Bomb | W deriving (Eq, Ord)
 
 newtype Range = Range Int deriving (Eq, Show)
+
+range :: Int -> Range
+range k
+  | k <= 0 = Range 0
+  | otherwise = Range k
 
 instance Show Action where
     show (B (Bomb pos _)) = show pos
@@ -64,9 +87,9 @@ data Direction = U | D | R | L deriving (Eq, Show)
 
 data GameState = GameState {
     _firewall       :: Firewall
-  , _bombs          :: [Bomb]  -- Use a set for efficient lookups?
+  , _bombs          :: S.Set Bomb
   , _remainingTurns :: Int
-  , _remaingBombs   :: Int
+  , _remainingBombs :: Int
   } deriving (Eq, Show)
 
 makeLenses ''GameState
@@ -100,17 +123,23 @@ parseCell _   = Nothing
 
 -- Game Logic
 
--- TODO
 -- TODO: write Specs
 generateActions :: GameState -> S.Set Action
-generateActions gst = S.union (S.fromList (fmap bombAction (emptyPositions gst)))
-                              (S.fromList [W])
+generateActions gst
+  | _remainingTurns gst <= 0 = S.empty
+  | _remainingBombs gst <= 0 = S.fromList [W]
+  | otherwise                = S.insert W (S.map bombAction (emptyPositions gst))
   where
-    emptyPositions :: GameState -> [Position]
-    emptyPositions _ = [] -- TODO: filter out bombs
+    -- TODO: cleanup this mess
+    emptyPositions :: GameState -> S.Set Position
+    emptyPositions g = let f = (_firewall g)
+                           cs = S.fromList $ catMaybes $ zipWith (\i c -> if c == E then Just (linearToCartesian (height f) (width f) i) else Nothing) [0..] $
+                               view (firewall . cells) g
+                           bs = S.map (\(Bomb pos _) -> pos) (_bombs g)
+                       in S.difference cs bs
 
     bombAction :: Position -> Action
-    bombAction pos = B $ Bomb pos (TTL 3)
+    bombAction pos = B $ bomb pos (ttl 3)
 
 -- TODO
 rank :: GameState -> S.Set Action -> [Action]
@@ -120,6 +149,7 @@ rank = const S.toList
 
 newtype Path = Path [Action] deriving (Eq, Show)
 
+-- TODO: do I need this??
 isWinningPath :: Path -> Bool
 isWinningPath = undefined
 
@@ -134,10 +164,13 @@ dfs = undefined
 wait :: GameState -> GameState
 wait = over remainingTurns (\x -> x - 1)
 
+addBomb :: Bomb -> GameState -> GameState
+addBomb b = over bombs (S.insert b)
+
 -- TODO: write Specs
 performAction :: Action -> GameState -> GameState
-performAction W        = tick . wait
-performAction (B bomb) = tick . over bombs (bomb:)
+performAction W     = tick . wait
+performAction (B b) = tick . addBomb b
 
 -- TODO: write Specs
 gameTree :: GameState -> GameTree
@@ -150,20 +183,20 @@ gameTree gst
 -- |It plays one round of the game
 tick :: GameState -> GameState
 tick gst =
-  over bombs ((filter (not . isExplodingBomb)) . map decreaseTTL) $
+  over bombs ((S.filter (not . isExplodingBomb)) . S.map decreaseTTL) $
   over remainingTurns (\x -> x - 1) $
-  over firewall (explodeBombs (Range 3) (filter isExplodingBomb (_bombs gst))) $
+  over firewall (explodeBombs (Range 3) (S.filter isExplodingBomb (_bombs gst))) $
   gst
 
   where
     isExplodingBomb :: Bomb -> Bool
-    isExplodingBomb (Bomb _ (TTL ttl)) = ttl <= 0
+    isExplodingBomb (Bomb _ (TTL t)) = t <= 0
 
     decreaseTTL :: Bomb -> Bomb
-    decreaseTTL (Bomb pos (TTL ttl)) = Bomb pos (TTL (ttl - 1))
+    decreaseTTL (Bomb pos (TTL t)) = Bomb pos (TTL (t - 1))
 
-    explodeBombs :: Range -> [Bomb] -> Firewall -> Firewall
-    explodeBombs r bs f = foldl (\f' b -> explode (_bombs gst) r b f') f bs
+    explodeBombs :: Range -> S.Set Bomb -> Firewall -> Firewall
+    explodeBombs r bs f = S.fold (\b f' -> explode (_bombs gst) r b f') f bs
 
 -- TODO: write specs
 lost :: GameState -> Bool
@@ -175,7 +208,7 @@ lost gst = (noGameTurns gst) || (noBombs gst && remainingSurveillanceNodes gst)
     noGameTurns = (<=0) . _remainingTurns
 
     noBombs :: GameState -> Bool
-    noBombs gst' = length (_bombs gst') == 0 && _remaingBombs gst' == 0
+    noBombs gst' = length (_bombs gst') == 0 && _remainingBombs gst' == 0
 
     remainingSurveillanceNodes :: GameState -> Bool
     remainingSurveillanceNodes = any (==S) . view (firewall . cells)
@@ -190,40 +223,39 @@ won gst = (noSurveillanceNodes gst) && (remaingGameTurns gst)
     noSurveillanceNodes :: GameState -> Bool
     noSurveillanceNodes = all (/=S) . view (firewall . cells)
 
--- TODO: write specs
-explode :: [Bomb] -> Range -> Bomb -> Firewall -> Firewall
-explode bs range b@(Bomb pos (TTL ttl))
-  | ttl > 0 = id
+explode :: S.Set Bomb -> Range -> Bomb -> Firewall -> Firewall
+explode bs r b@(Bomb pos (TTL t))
+  | t > 0 = id
   | otherwise = forkExplode bombs'
 
     where
-      bombs' :: [Bomb]
-      bombs' = filter (/= b) bs
+      bombs' :: S.Set Bomb
+      bombs' = S.delete b bs
 
-      forkExplode :: [Bomb] -> Firewall -> Firewall
+      forkExplode :: S.Set Bomb -> Firewall -> Firewall
       forkExplode bs' f =
-        explodeDirection bs' L (shiftPosition f L pos) range $
-        explodeDirection bs' R (shiftPosition f R pos) range $
-        explodeDirection bs' U (shiftPosition f U pos) range $
-        explodeDirection bs' D (shiftPosition f D pos) range $ f
+        explodeDirection bs' L (shiftPosition f L pos) r $
+        explodeDirection bs' R (shiftPosition f R pos) r $
+        explodeDirection bs' U (shiftPosition f U pos) r $
+        explodeDirection bs' D (shiftPosition f D pos) r $ f
 
-explodeDirection :: [Bomb] -> Direction -> (Maybe Position) -> Range -> Firewall -> Firewall
-explodeDirection _ _ _ (Range 0) f = f
-explodeDirection _ _ Nothing _ f = f
+explodeDirection :: S.Set Bomb -> Direction -> (Maybe Position) -> Range -> Firewall -> Firewall
+explodeDirection _ _ _ (Range 0) f         = f
+explodeDirection _ _ Nothing _ f           = f
 explodeDirection bs d (Just p) (Range k) f =
   case atMay (_cells f) (cartesianToLinear (height f) (width f) p) of
     Nothing -> f
     Just I -> f
     Just E -> case (shiftPosition f d p) of
                  Nothing -> newFirewall
-                 pos'    -> explodeDirection bs d pos' (Range (k - 1)) newFirewall
+                 pos'    -> explodeDirection bs d pos' (range (k - 1)) newFirewall
               where newFirewall = case L.find (\(Bomb p' _) -> p' == p) bs of
                                     -- Recursively explode bombs
-                                    Just b -> explode (filter (/= b) bs) (Range 3) b f
-                                    Nothing -> f
+                                    Just b@(Bomb pos _) -> explode (S.delete b bs) (range 3) (bomb pos (ttl 0)) f
+                                    Nothing             -> f
     Just S -> case shiftPosition f d p of
                 Nothing -> newFirewall
-                pos'    -> explodeDirection bs d pos' (Range (k - 1)) newFirewall
+                pos'    -> explodeDirection bs d pos' (range (k - 1)) newFirewall
               where newFirewall = deleteSurveillanceNodeAt p f
 
 shiftPosition :: Firewall -> Direction -> Position -> Maybe Position
