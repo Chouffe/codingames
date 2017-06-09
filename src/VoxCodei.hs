@@ -5,12 +5,13 @@ module VoxCodei where
 
 -- import           Control.Arrow
 import           Control.Lens
-import           Control.Monad.Trans.State.Strict
-import qualified Data.List                        as L
-import qualified Data.Map                         as M
-import           Data.Maybe                       (catMaybes)
-import qualified Data.Set                         as S
-import           Safe                             (atMay, headMay)
+import           Control.Monad
+import qualified Data.List     as L
+import qualified Data.Map      as M
+import           Data.Maybe    (catMaybes, isJust)
+import qualified Data.Set      as S
+-- import qualified Debug.Trace   as T
+import           Safe          (atMay, headMay)
 
 
 -- import qualified Data.List as L
@@ -94,6 +95,9 @@ data GameState = GameState {
 
 makeLenses ''GameState
 
+initGameState :: Firewall -> Int -> Int -> GameState
+initGameState f = GameState f S.empty
+
 data Finished = Lost | Won deriving (Eq, Show)
 
 data GameTree = Leaf Finished
@@ -141,31 +145,36 @@ generateActions gst
     bombAction :: Position -> Action
     bombAction pos = B $ bomb pos (ttl 3)
 
--- TODO
-rank :: GameState -> S.Set Action -> [Action]
-rank = const S.toList
-
 -- TODO: Implement some greedy heuristic to pick the best Bomb positions
+-- TODO: write specs
+rank :: GameState -> M.Map Action GameTree -> [(Action, GameTree)]
+rank = const M.assocs
 
-newtype Path = Path [Action] deriving (Eq, Show)
+newtype Path = Path [(Action, GameState)] deriving (Eq, Show)
+
+actionsPath :: Path -> [Action]
+actionsPath (Path [])         = []
+actionsPath (Path ((a, _):p)) = a : actionsPath (Path p)
+
+gameStatePath :: Path -> [GameState]
+gameStatePath (Path [])           = []
+gameStatePath (Path ((_, gst):p)) = gst : gameStatePath (Path p)
 
 -- TODO: do I need this??
 isWinningPath :: Path -> Bool
 isWinningPath = undefined
 
-data TreeSearchState = TSS { path :: Path }
-  deriving (Eq, Show)
+dfs :: Path -> GameTree -> Maybe Path
+dfs (Path p) (Leaf Won) = Just $ Path $ reverse p
+dfs _ (Leaf Lost)   = Nothing
+dfs (Path p) (Node gst actionTrees) = join $ L.find isJust mpaths
+  where mpaths = map (\(action, gt) -> dfs (Path ((action, gst):p)) gt) (rank gst actionTrees)
 
--- TODO
-dfs :: GameTree -> State TreeSearchState ()
-dfs = undefined
-
--- TODO: write Specs
 wait :: GameState -> GameState
-wait = over remainingTurns (\x -> x - 1)
+wait = id
 
 addBomb :: Bomb -> GameState -> GameState
-addBomb b = over bombs (S.insert b)
+addBomb b = over bombs (S.insert b) . over remainingBombs (\x -> x - 1)
 
 -- TODO: write Specs
 performAction :: Action -> GameState -> GameState
@@ -175,25 +184,24 @@ performAction (B b) = tick . addBomb b
 -- TODO: write Specs
 gameTree :: GameState -> GameTree
 gameTree gst
-  | lost gst  = Leaf Lost
   | won gst   = Leaf Won
+  | lost gst  = Leaf Lost
   | otherwise = Node gst (M.fromList [(action, gameTree (performAction action gst)) | action <- S.toList (generateActions gst)])
 
--- TODO: write Specs
+decreaseTTL :: Bomb -> Bomb
+decreaseTTL (Bomb pos (TTL t)) = bomb pos (ttl (t - 1))
+
 -- |It plays one round of the game
 tick :: GameState -> GameState
 tick gst =
-  over bombs ((S.filter (not . isExplodingBomb)) . S.map decreaseTTL) $
+  over bombs (S.map decreaseTTL . (S.filter (not . isExplodingBomb))) $
   over remainingTurns (\x -> x - 1) $
-  over firewall (explodeBombs (Range 3) (S.filter isExplodingBomb (_bombs gst))) $
+  over firewall (explodeBombs (range 3) (S.filter isExplodingBomb (_bombs gst))) $
   gst
 
   where
     isExplodingBomb :: Bomb -> Bool
     isExplodingBomb (Bomb _ (TTL t)) = t <= 0
-
-    decreaseTTL :: Bomb -> Bomb
-    decreaseTTL (Bomb pos (TTL t)) = Bomb pos (TTL (t - 1))
 
     explodeBombs :: Range -> S.Set Bomb -> Firewall -> Firewall
     explodeBombs r bs f = S.fold (\b f' -> explode (_bombs gst) r b f') f bs
@@ -285,3 +293,74 @@ deleteSurveillanceNodeAt pos f = over cells updateCells f
 
     updateCells :: [Cell] -> [Cell]
     updateCells = zipWith (updateAt k) [0..]
+
+-- Tests
+
+firewall1 :: Firewall
+firewall1 = makeFirewall [ E, E, E, E
+                         , E, S, E, E
+                         , E, E, E, E
+                         ] 3 4
+
+firewall2 :: Firewall
+firewall2 = makeFirewall [ E, E, E, E
+                         , S, E, S, S
+                         , E, E, E, E
+                         ] 3 4
+
+firewall4 :: Firewall
+firewall4 = makeFirewall [ E, S, E, E
+                         , S, E, S, E
+                         , E, S, E, E
+                         ] 3 4
+
+firewall5 :: Firewall
+firewall5 = makeFirewall [ E, E, E, E, S, S, S, E
+                         , E, S, S, S, E, E, E, S
+                         , S, E, E, E, S, E, E, S
+                         , S, E, E, E, S, E, E, S
+                         , S, E, E, E, S, E, E, E
+                         , E, S, S, S, E, S, S, S
+                         ] 6 8
+
+firewall6 :: Firewall
+firewall6 = makeFirewall [ E, S, E, E, E, E, E, S
+                         , E, E, E, E, E, E, E, E
+                         , E, E, E, E, E, E, E, E
+                         , E, E, E, E, E, E, E, E
+                         , E, E, E, E, E, E, E, E
+                         , E, S, E, E, E, E, E, S
+                         ] 6 8
+
+gamestate1 :: GameState
+gamestate1 = initGameState firewall1 5 1
+
+gamestate2 :: GameState
+gamestate2 = initGameState firewall2 5 1
+
+gamestate4 :: GameState
+gamestate4 = initGameState firewall4 5 1
+
+gamestate5 :: GameState
+gamestate5 = initGameState firewall5 8 3
+
+gamestate6 :: GameState
+gamestate6 = initGameState firewall6 8 2
+
+bomb1 :: Bomb
+bomb1 = bomb (position 0 0) (ttl 3)
+
+gameTree1 :: GameTree
+gameTree1 = gameTree gamestate1
+
+gameTree2 :: GameTree
+gameTree2 = gameTree gamestate2
+
+gameTree4 :: GameTree
+gameTree4 = gameTree gamestate4
+
+gameTree5 :: GameTree
+gameTree5 = gameTree gamestate5
+
+gameTree6 :: GameTree
+gameTree6 = gameTree gamestate6
