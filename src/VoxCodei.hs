@@ -1,20 +1,24 @@
+{-# LANGUAGE DeriveAnyClass      #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
 
 module VoxCodei where
 
 -- import           Control.Arrow
+import           Control.Applicative
+import           Control.DeepSeq
 import           Control.Lens
 import           Control.Monad
-import qualified Data.List     as L
-import qualified Data.Map      as M
-import           Data.Maybe    (catMaybes, isJust)
-import qualified Data.Set      as S
--- import qualified Debug.Trace   as T
-import           Safe          (atMay, headMay)
-
-
--- import qualified Data.List as L
+import qualified Data.List           as L
+import qualified Data.Map            as M
+import           Data.Maybe          (catMaybes, isJust)
+import           Data.Ord            (comparing)
+import qualified Data.Set            as S
+import qualified Debug.Trace         as T
+import           GHC.Generics        (Generic)
+import           Safe                (atMay, headMay)
+import           System.IO
 
 -- Data Modeling
 
@@ -22,7 +26,7 @@ import           Safe          (atMay, headMay)
 -- | S: Surveillance cell
 -- | I: Indestructible cell
 -- | E: empty cell
-data Cell = S | I | E deriving (Eq)
+data Cell = S | I | E deriving (Eq, NFData, Generic)
 
 instance Show Cell where
     show S = "@"
@@ -33,7 +37,7 @@ data Firewall = Firewall {
      _cells  :: [Cell]  -- linearIndex to Cell, should we use a Map Position Cell?
     , height :: Int
     , width  :: Int
-    } deriving (Eq)
+    } deriving (Eq, NFData, Generic)
 
 makeFirewall :: [Cell] -> Int -> Int -> Firewall
 makeFirewall cs h w = Firewall cs h w
@@ -51,7 +55,7 @@ instance Show Firewall where
             showRow :: [Cell] -> String
             showRow = concat . fmap show
 
-newtype Position = Position (Int, Int) deriving (Eq, Ord)
+newtype Position = Position (Int, Int) deriving (Eq, Ord, NFData, Generic)
 
 position :: Int -> Int -> Position
 position x y = Position (x, y)
@@ -59,19 +63,19 @@ position x y = Position (x, y)
 instance Show Position where
     show (Position (x, y)) = show x ++ " " ++ show y
 
-newtype TTL = TTL Int deriving (Eq, Ord, Show)
+newtype TTL = TTL Int deriving (Eq, Ord, Show, NFData, Generic)
 
 ttl :: Int -> TTL
 ttl x
   | x <= 0 = TTL 0
   | otherwise = TTL x
 
-data Bomb = Bomb Position TTL deriving (Eq, Ord, Show)
+data Bomb = Bomb Position TTL deriving (Eq, Ord, Show, NFData, Generic)
 
 bomb :: Position -> TTL -> Bomb
 bomb pos t = (Bomb pos t)
 
-data Action = B Bomb | W deriving (Eq, Ord)
+data Action = B Bomb | W deriving (Eq, Ord, NFData, Generic)
 
 newtype Range = Range Int deriving (Eq, Show)
 
@@ -91,7 +95,7 @@ data GameState = GameState {
   , _bombs          :: S.Set Bomb
   , _remainingTurns :: Int
   , _remainingBombs :: Int
-  } deriving (Eq, Show)
+  } deriving (Eq, Show, NFData, Generic)
 
 makeLenses ''GameState
 
@@ -125,6 +129,22 @@ parseCell '#' = Just I
 parseCell '.' = Just E
 parseCell _   = Nothing
 
+parseInt :: String -> Maybe Int
+parseInt str =
+  case reads str :: [(Int, String)] of
+    [(n, _)] -> Just n
+    _        -> Nothing
+
+parseGridSize :: String -> Maybe (Int, Int)
+parseGridSize str = do
+  case words str of
+    [h, w] -> liftA2 (,) (parseInt h) (parseInt w)
+    _      -> Nothing
+
+parseGameInput :: [String] -> Maybe Firewall
+parseGameInput (gridSize:firewallInput) = parseGridSize gridSize >> parseFirewall firewallInput
+parseGameInput _ = Nothing
+
 -- Game Logic
 
 -- TODO: write Specs
@@ -145,12 +165,46 @@ generateActions gst
     bombAction :: Position -> Action
     bombAction pos = B $ bomb pos (ttl 3)
 
--- TODO: Implement some greedy heuristic to pick the best Bomb positions
--- TODO: write specs
 rank :: GameState -> M.Map Action GameTree -> [(Action, GameTree)]
-rank = const M.assocs
+rank gst actionTreeMap = sortByActionDamage gst $ M.assocs actionTreeMap
+  where
+    sortByActionDamage :: GameState -> [(Action, GameTree)] -> [(Action, GameTree)]
+    sortByActionDamage gst' = reverse . L.sortBy (comparing ((actionDamage gst') . fst))
 
-newtype Path = Path [(Action, GameState)] deriving (Eq, Show)
+prune :: GameState -> [(Action, GameTree)] -> [(Action, GameTree)]
+prune = removeNoDamage
+  where
+    removeNoDamage :: GameState -> [(Action, GameTree)] -> [(Action, GameTree)]
+    removeNoDamage gst' = filter (\(a, _) -> actionDamage gst' a >= 0)
+
+heuristic :: GameState -> M.Map Action GameTree -> [(Action, GameTree)]
+heuristic gst = prune gst . rank gst
+
+actionDamage :: GameState -> Action -> Int
+actionDamage _ W                  = 0
+actionDamage gst (B (Bomb pos _)) =
+  sum $ map (\d -> bombDirectionDamage (_bombs gst) d (Just pos) (range 4) (_firewall gst)) [U, D, L, R]
+  -- TODO: Need to explode current bombs to see what is the next best move
+  -- TODO: should return something like State GameState Int instead of an Int... otherwise it wont work
+  where
+    bombDirectionDamage :: S.Set Bomb -> Direction -> (Maybe Position) -> Range -> Firewall -> Int
+    bombDirectionDamage _ _ _ (Range 0) _         = 0
+    bombDirectionDamage _ _ Nothing _ _           = 0
+    bombDirectionDamage bs d (Just p) (Range k) f =
+      case atMay (_cells f) (cartesianToLinear (height f) (width f) p) of
+        Nothing -> 0
+        Just I -> 0
+        Just E -> case (shiftPosition f d p) of
+                    Nothing -> 0
+                    mpos    -> bombDirectionDamage bs d mpos (range (k - 1)) f
+        Just S -> case (shiftPosition f d p) of
+                    Nothing -> 1
+                    mpos    -> 1 + bombDirectionDamage bs d mpos (range (k - 1)) f
+
+newtype Path = Path [(Action, GameState)] deriving (Eq, Show, NFData, Generic)
+
+emptyPath :: Path
+emptyPath = Path []
 
 actionsPath :: Path -> [Action]
 actionsPath (Path [])         = []
@@ -160,15 +214,23 @@ gameStatePath :: Path -> [GameState]
 gameStatePath (Path [])           = []
 gameStatePath (Path ((_, gst):p)) = gst : gameStatePath (Path p)
 
--- TODO: do I need this??
-isWinningPath :: Path -> Bool
-isWinningPath = undefined
-
 dfs :: Path -> GameTree -> Maybe Path
 dfs (Path p) (Leaf Won) = Just $ Path $ reverse p
 dfs _ (Leaf Lost)   = Nothing
 dfs (Path p) (Node gst actionTrees) = join $ L.find isJust mpaths
-  where mpaths = map (\(action, gt) -> dfs (Path ((action, gst):p)) gt) (rank gst actionTrees)
+
+  where
+    assocs :: [(Action, GameTree)]
+    assocs = heuristic gst actionTrees
+
+    mpaths :: [Maybe Path]
+    mpaths = map (\(action, gt) -> dfs (Path ((action, gst):p)) gt) $ T.trace ("heuristic" ++ show (map fst assocs)) assocs
+
+solve :: Int -> Int -> Firewall -> Maybe Path
+solve rturns rbombs f = dfs emptyPath (gameTree gameState)
+  where
+    gameState :: GameState
+    gameState = initGameState f rturns rbombs
 
 wait :: GameState -> GameState
 wait = id
@@ -240,6 +302,7 @@ explode bs r b@(Bomb pos (TTL t))
       bombs' :: S.Set Bomb
       bombs' = S.delete b bs
 
+      -- TODO use a fold here instead
       forkExplode :: S.Set Bomb -> Firewall -> Firewall
       forkExplode bs' f =
         explodeDirection bs' L (shiftPosition f L pos) r $
@@ -294,6 +357,63 @@ deleteSurveillanceNodeAt pos f = over cells updateCells f
     updateCells :: [Cell] -> [Cell]
     updateCells = zipWith (updateAt k) [0..]
 
+-- IO Actions
+
+gameInput :: IO (Maybe Firewall)
+gameInput = do
+  gridSizeInput <- getLine
+  case parseGridSize gridSizeInput of
+    Nothing -> return Nothing
+    Just (h, _) -> do
+      firewallInput <- replicateM h getLine
+      case parseFirewall firewallInput of
+        Nothing -> return Nothing
+        mf      -> return mf
+
+gameLoopInput :: IO (Maybe (Int, Int))
+gameLoopInput = do
+  remaining <- getLine
+  case words remaining of
+    [rturns, rbombs] -> return $ liftA2 (,) (parseInt rturns) (parseInt rbombs)
+    _ -> return Nothing
+
+gameLoop :: GameState -> IO ()
+gameLoop gst = do
+  mstate <- gameLoopInput
+  case mstate of
+    Nothing -> return ()
+    Just (rturns, rbombs) -> do
+      debugGameLoop rturns rbombs
+      case mpath of
+        Nothing -> return ()
+        Just (Path []) -> return ()
+        Just p@(Path ((a,_):_)) -> do
+          debugPath p
+          putStrLn (show a)
+          gameLoop (performAction a gst)
+      where mpath = solve rturns rbombs (_firewall gst)
+
+main :: IO ()
+main = do
+    hSetBuffering stdout NoBuffering
+    mfirewall <- gameInput
+    case mfirewall of
+      Nothing -> return ()
+      Just f  -> debugMain f >> gameLoop (initGameState f 0 0)
+
+-- Debug
+
+debugGameLoop :: Int -> Int -> IO ()
+debugGameLoop rturns rbombs = do
+  hPutStrLn stderr $ "Turns remaining: " ++ show rturns
+  hPutStrLn stderr $ "Bombs remaining: " ++ show rbombs
+
+debugMain :: Firewall -> IO ()
+debugMain f = hPutStrLn stderr $ "Firewall: " ++ show f
+
+debugPath :: Path -> IO ()
+debugPath p = hPutStrLn stderr $ "actions foreseen: " ++ show (actionsPath p)
+
 -- Tests
 
 firewall1 :: Firewall
@@ -331,6 +451,18 @@ firewall6 = makeFirewall [ E, S, E, E, E, E, E, S
                          , E, E, E, E, E, E, E, E
                          , E, S, E, E, E, E, E, S
                          ] 6 8
+
+firewall10 :: Firewall
+firewall10 = makeFirewall [ E, E, E, E, E, E, E, E, E, E, E, E
+                          , E, I, S, S, S, E, I, S, S, S, E, E
+                          , E, S, E, E, E, E, S, E, E, E, E, E
+                          , E, S, E, E, E, E, S, E, E, E, E, E
+                          , E, S, E, E, E, E, S, E, E, S, I, E
+                          , E, S, E, E, E, E, S, E, E, E, S, E
+                          , E, E, S, S, S, E, E, S, S, S, I, E
+                          , E, E, E, E, E, E, E, E, E, E, E, E
+                          , E, E, E, E, E, E, E, E, E, E, E, E
+                          ] 9 12
 
 gamestate1 :: GameState
 gamestate1 = initGameState firewall1 5 1

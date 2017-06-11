@@ -1,12 +1,18 @@
+{-# LANGUAGE DeriveAnyClass      #-}
+{-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module VoxCodeiSpec (spec) where
+{-# OPTIONS_GHC -fno-full-laziness #-}
+
+module VoxCodeiSpec (spec, benchmark) where
 
 import           Control.Lens
-import qualified Data.List    as L
-import qualified Data.Set     as S
+import qualified Data.List      as L
+import qualified Data.Set       as S
 import           Test.Hspec
 -- import           Test.QuickCheck
+import           Criterion.Main
+-- import           Criterion.Measurement
 import           VoxCodei
 
 specPath :: Int -> FilePath
@@ -42,6 +48,13 @@ withGameState :: Int -> String -> Int -> Int -> (GameState -> Expectation) -> Sp
 withGameState i title rturns rbombs handler =
   withSpecFirewall i title
     (\f -> handler (initGameState f rturns rbombs))
+
+solveWithSpecFirewall :: Int -> Int -> Int -> IO (Maybe Path)
+solveWithSpecFirewall i rturns rbombs = do
+  mfirewall <- getFirewall i
+  case mfirewall of
+    Nothing -> fail $ "could not parse spec " ++ show i
+    Just f  -> return $ solve rturns rbombs f
 
 spec :: Spec
 spec = describe "VoxCodei" $ do
@@ -290,3 +303,23 @@ spec = describe "VoxCodei" $ do
   -- TODO
   describe "gameTree" $ do
     it "returns the correct gameTree" pending
+
+benchmark :: Benchmark
+benchmark =
+  bgroup "solve" $
+    fmap (\(i, rturns, rbombs) -> bench (show i) $ nfIO (solveWithSpecFirewall i rturns rbombs)) puzzles
+
+ where
+   puzzles :: [(Int, Int, Int)]
+   puzzles = [ (1, 4, 1)  -- 80 microsec
+             , (2, 15, 3) -- 160 microsec
+             , (3, 15, 9) -- 25 ms -- Should speed up with pruning
+             , (4, 4, 1) -- 178 microsec
+             , (5, 15, 3) -- 15ms
+             , (6, 5, 2) -- 10 msec
+             , (7, 15, 4) -- 5msec
+             , (8, 10, 3) -- 77 ms -- can be higher than constraint
+             , (9, 10, 2) -- 85 ms -- can be higher than constraint
+             -- , (10, 15, 6) -- Not finishing fast enough
+             -- , (11, 15, 4) -- Not finishing fast enough
+             ]
