@@ -28,6 +28,8 @@ library
                      , fgl
                      , lens
                      , mtl
+                     , parsec
+                     , pretty
                      , random
                      , safe
                      , text
@@ -55,6 +57,8 @@ test-suite codingames-test
                      , criterion
                      , hspec
                      , lens
+                     , parsec
+                     , pretty
                      , QuickCheck
                      , time
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
