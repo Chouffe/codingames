@@ -65,7 +65,9 @@ parseBlock = do
 parseKeyValue :: P.Parser CGXValue
 parseKeyValue = do
     key <- parseStr
+    P.skipMany P.space
     _ <- P.char '='
+    P.skipMany P.space
     value <- parseCGXValue
     return $ CGXKeyValue key value
 
