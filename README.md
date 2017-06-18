@@ -8,6 +8,7 @@ The goal is to practice my Haskell and have some fun in the process.
 
 ### Solved
 
+- CGXFormatter
 - Descent
 - ShadowsOfTheKnight
 - SkynetRevolution
