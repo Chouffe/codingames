@@ -3,6 +3,7 @@ module Main where
 import qualified CGXFormatterSpec
 import           Criterion.Main
 import qualified SkynetRevolution2Spec
+import qualified SuperComputerSpec
 import           Test.Hspec
 import qualified VoxCodeiSpec
 import qualified WarSpec
