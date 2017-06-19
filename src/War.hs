@@ -2,7 +2,7 @@
 
 module War where
 
-import           Control.Monad (replicateM)
+import           Control.Monad (forM_, replicateM)
 -- import           Debug.Trace   (trace)
 
 -- Data Modeling
@@ -149,8 +149,8 @@ incGameTurn :: Int -> BattleDecks -> Int
 incGameTurn k (BattleDecks (Deck b1, _)) = if null b1 then k + 1 else k
 
 warGameTurn :: (Int, BattleDecks, Deck, Deck) -> Either (Maybe GameResult) (Int, BattleDecks, Deck, Deck)
-warGameTurn (k, (BattleDecks (Deck [], Deck [])), Deck [], Deck (_:_)) = Left $ Just $ Winner k Player2
-warGameTurn (k, (BattleDecks (Deck [], Deck [])), Deck (_:_), Deck []) = Left $ Just $ Winner k Player1
+warGameTurn (k, BattleDecks (Deck [], Deck []), Deck [], Deck (_:_)) = Left $ Just $ Winner k Player2
+warGameTurn (k, BattleDecks (Deck [], Deck []), Deck (_:_), Deck []) = Left $ Just $ Winner k Player1
 warGameTurn (k, bds@(BattleDecks (Deck b1, Deck b2)), Deck p1, Deck p2)
   | length b1 /= length b2 = Left $ Just Tie
   | null p1 || null p2     = Left Nothing
@@ -159,8 +159,8 @@ warGameTurn (k, bds@(BattleDecks (Deck b1, Deck b2)), Deck p1, Deck p2)
       GT -> Right (incGameTurn k bds, BattleDecks (Deck [], Deck []), Deck (xs ++ b1 ++ [x] ++ b2 ++ [y]), Deck ys)
       LT -> Right (incGameTurn k bds, BattleDecks (Deck [], Deck []), Deck xs, Deck (ys ++ b1 ++ [x] ++ b2 ++ [y]))
       EQ -> Right ( incGameTurn k bds
-                  , BattleDecks (Deck (b1 ++ (take 4 p1))
-                  , Deck (b2 ++ (take 4 p2)))
+                  , BattleDecks (Deck (b1 ++ take 4 p1)
+                  , Deck (b2 ++ take 4 p2))
                   , Deck (drop 4 p1)
                   , Deck (drop 4 p2))
     where (x:xs) = p1
@@ -202,10 +202,8 @@ main :: IO ()
 main = do
   mdecks <- gameInput
   case mdecks of
-    Nothing -> return ()  -- Parsing failed
-    Just (d1, d2) -> case fight d1 d2 of
-                       Nothing         -> return () -- Game failed
-                       Just gameResult -> print gameResult
+    Nothing       -> return ()  -- Parsing failed
+    Just (d1, d2) -> forM_ (fight d1 d2) print
 
 -- Utils
 

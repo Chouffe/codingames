@@ -40,20 +40,20 @@ data Firewall = Firewall {
     } deriving (Eq, NFData, Generic)
 
 makeFirewall :: [Cell] -> Int -> Int -> Firewall
-makeFirewall cs h w = Firewall cs h w
+makeFirewall = Firewall
 
 makeLenses ''Firewall
 
 instance Show Firewall where
-    show (Firewall es _ w) = unlines $ showRow <$> (makeRows w es)
+    show (Firewall es _ w) = unlines $ showRow <$> makeRows w es
         where
             makeRows :: Int -> [Cell] -> [[Cell]]
             makeRows w' cs = foldl (\rs k -> rs ++ [drop (w' * k) (take (w' * (k + 1)) cs)])
                                    []
-                                   [0..(div (length cs) w) - 1]
+                                   [0.. div (length cs) w - 1]
 
             showRow :: [Cell] -> String
-            showRow = concat . fmap show
+            showRow = concatMap show
 
 newtype Position = Position (Int, Int) deriving (Eq, Ord, NFData, Generic)
 
@@ -73,7 +73,7 @@ ttl x
 data Bomb = Bomb Position TTL deriving (Eq, Ord, Show, NFData, Generic)
 
 bomb :: Position -> TTL -> Bomb
-bomb pos t = (Bomb pos t)
+bomb = Bomb
 
 data Action = B Bomb | W deriving (Eq, Ord, NFData, Generic)
 
@@ -136,7 +136,7 @@ parseInt str =
     _        -> Nothing
 
 parseGridSize :: String -> Maybe (Int, Int)
-parseGridSize str = do
+parseGridSize str =
   case words str of
     [h, w] -> liftA2 (,) (parseInt h) (parseInt w)
     _      -> Nothing
@@ -156,7 +156,7 @@ generateActions gst
   where
     -- TODO: cleanup this mess
     emptyPositions :: GameState -> S.Set Position
-    emptyPositions g = let f = (_firewall g)
+    emptyPositions g = let f = _firewall g
                            cs = S.fromList $ catMaybes $ zipWith (\i c -> if c == E then Just (linearToCartesian (height f) (width f) i) else Nothing) [0..] $
                                view (firewall . cells) g
                            bs = S.map (\(Bomb pos _) -> pos) (_bombs g)
@@ -169,7 +169,7 @@ rank :: GameState -> M.Map Action GameTree -> [(Action, GameTree)]
 rank gst actionTreeMap = sortByActionDamage gst $ M.assocs actionTreeMap
   where
     sortByActionDamage :: GameState -> [(Action, GameTree)] -> [(Action, GameTree)]
-    sortByActionDamage gst' = reverse . L.sortBy (comparing ((actionDamage gst') . fst))
+    sortByActionDamage gst' = L.sortBy (flip (comparing (actionDamage gst' . fst)))
 
 prune :: GameState -> [(Action, GameTree)] -> [(Action, GameTree)]
 prune = removeNoDamage
@@ -187,17 +187,17 @@ actionDamage gst (B (Bomb pos _)) =
   -- TODO: Need to explode current bombs to see what is the next best move
   -- TODO: should return something like State GameState Int instead of an Int... otherwise it wont work
   where
-    bombDirectionDamage :: S.Set Bomb -> Direction -> (Maybe Position) -> Range -> Firewall -> Int
+    bombDirectionDamage :: S.Set Bomb -> Direction -> Maybe Position -> Range -> Firewall -> Int
     bombDirectionDamage _ _ _ (Range 0) _         = 0
     bombDirectionDamage _ _ Nothing _ _           = 0
     bombDirectionDamage bs d (Just p) (Range k) f =
       case atMay (_cells f) (cartesianToLinear (height f) (width f) p) of
         Nothing -> 0
         Just I -> 0
-        Just E -> case (shiftPosition f d p) of
+        Just E -> case shiftPosition f d p of
                     Nothing -> 0
                     mpos    -> bombDirectionDamage bs d mpos (range (k - 1)) f
-        Just S -> case (shiftPosition f d p) of
+        Just S -> case shiftPosition f d p of
                     Nothing -> 1
                     mpos    -> 1 + bombDirectionDamage bs d mpos (range (k - 1)) f
 
@@ -256,9 +256,9 @@ decreaseTTL (Bomb pos (TTL t)) = bomb pos (ttl (t - 1))
 -- |It plays one round of the game
 tick :: GameState -> GameState
 tick gst =
-  over bombs (S.map decreaseTTL . (S.filter (not . isExplodingBomb))) $
+  over bombs (S.map decreaseTTL . S.filter (not . isExplodingBomb)) $
   over remainingTurns (\x -> x - 1) $
-  over firewall (explodeBombs (range 3) (S.filter isExplodingBomb (_bombs gst))) $
+  over firewall (explodeBombs (range 3) (S.filter isExplodingBomb (_bombs gst)))
   gst
 
   where
@@ -266,11 +266,11 @@ tick gst =
     isExplodingBomb (Bomb _ (TTL t)) = t <= 0
 
     explodeBombs :: Range -> S.Set Bomb -> Firewall -> Firewall
-    explodeBombs r bs f = S.fold (\b f' -> explode (_bombs gst) r b f') f bs
+    explodeBombs r bs f = S.fold (explode (_bombs gst) r) f bs
 
 -- TODO: write specs
 lost :: GameState -> Bool
-lost gst = (noGameTurns gst) || (noBombs gst && remainingSurveillanceNodes gst)
+lost gst = noGameTurns gst || noBombs gst && remainingSurveillanceNodes gst
   -- TODO: how can I write something like the following? -- more elegant
   -- noGameTurns ||| (noBombs &&& remainingSurveillanceNodes)
   where
@@ -278,20 +278,20 @@ lost gst = (noGameTurns gst) || (noBombs gst && remainingSurveillanceNodes gst)
     noGameTurns = (<=0) . _remainingTurns
 
     noBombs :: GameState -> Bool
-    noBombs gst' = length (_bombs gst') == 0 && _remainingBombs gst' == 0
+    noBombs gst' = null (_bombs gst') && _remainingBombs gst' == 0
 
     remainingSurveillanceNodes :: GameState -> Bool
-    remainingSurveillanceNodes = any (==S) . view (firewall . cells)
+    remainingSurveillanceNodes = elem S . view (firewall . cells)
 
 -- TODO: write specs
 won :: GameState -> Bool
-won gst = (noSurveillanceNodes gst) && (remaingGameTurns gst)
+won gst = noSurveillanceNodes gst && remaingGameTurns gst
   where
     remaingGameTurns :: GameState -> Bool
     remaingGameTurns = (>=0) . _remainingTurns
 
     noSurveillanceNodes :: GameState -> Bool
-    noSurveillanceNodes = all (/=S) . view (firewall . cells)
+    noSurveillanceNodes = notElem S . view (firewall . cells)
 
 explode :: S.Set Bomb -> Range -> Bomb -> Firewall -> Firewall
 explode bs r b@(Bomb pos (TTL t))
@@ -308,16 +308,16 @@ explode bs r b@(Bomb pos (TTL t))
         explodeDirection bs' L (shiftPosition f L pos) r $
         explodeDirection bs' R (shiftPosition f R pos) r $
         explodeDirection bs' U (shiftPosition f U pos) r $
-        explodeDirection bs' D (shiftPosition f D pos) r $ f
+        explodeDirection bs' D (shiftPosition f D pos) r f
 
-explodeDirection :: S.Set Bomb -> Direction -> (Maybe Position) -> Range -> Firewall -> Firewall
+explodeDirection :: S.Set Bomb -> Direction -> Maybe Position -> Range -> Firewall -> Firewall
 explodeDirection _ _ _ (Range 0) f         = f
 explodeDirection _ _ Nothing _ f           = f
 explodeDirection bs d (Just p) (Range k) f =
   case atMay (_cells f) (cartesianToLinear (height f) (width f) p) of
     Nothing -> f
     Just I -> f
-    Just E -> case (shiftPosition f d p) of
+    Just E -> case shiftPosition f d p of
                  Nothing -> newFirewall
                  pos'    -> explodeDirection bs d pos' (range (k - 1)) newFirewall
               where newFirewall = case L.find (\(Bomb p' _) -> p' == p) bs of
@@ -389,7 +389,7 @@ gameLoop gst = do
         Just (Path []) -> return ()
         Just p@(Path ((a,_):_)) -> do
           debugPath p
-          putStrLn (show a)
+          print a
           gameLoop (performAction a gst)
       where mpath = solve rturns rbombs (_firewall gst)
 
