@@ -8,6 +8,7 @@ import qualified Data.List           as L
 import qualified Data.Map            as M
 import qualified Data.Set            as S
 import qualified Data.Text           as T
+import           System.IO
 -- import qualified Debug.Trace         as T
 
 -- Data Modeling
@@ -123,6 +124,39 @@ messageNumber m dict
           prs <- T.stripPrefix pr morse
           sus <- T.stripSuffix su morse
           return (pr, prs, su, sus)
+
+-- Parsers
+
+parseMorse :: String -> Maybe Morse
+parseMorse = Just . T.pack
+
+parsePlain :: [String] -> Maybe [Plain]
+parsePlain = Just
+
+parseGameInput :: String -> Maybe (Morse, [Plain])
+parseGameInput content = case lines content of
+                           (m:_:xs) -> liftA2 (,) (parseMorse m) (parsePlain xs)
+                           _        -> Nothing
+
+-- Debug Logic
+
+debugMain :: Morse -> [Plain] -> IO ()
+debugMain morse ws = do
+  hPutStrLn stderr $ "morse: " ++ T.unpack morse
+  hPutStrLn stderr "words:"
+  mapM_ (hPutStrLn stderr) ws
+
+-- Game Logic
+
+main :: IO ()
+main = do
+    hSetBuffering stdout NoBuffering
+    input <- getContents
+    case parseGameInput input of
+      Nothing -> fail "Could not parse Game Input"
+      Just (morse, ws) -> do
+        debugMain morse ws
+        print (messageNumber morse (dictionary morseTable ws))
 
 -- Tests
 
