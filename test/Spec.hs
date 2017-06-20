@@ -1,16 +1,19 @@
 module Main where
 
 import qualified CGXFormatterSpec
-import           Criterion.Main
 import qualified SkynetRevolution2Spec
 import qualified SuperComputerSpec
-import           Test.Hspec
+import qualified TheResistanceSpec
 import qualified VoxCodeiSpec
 import qualified WarSpec
 
+import           Criterion.Main
+import           Test.Hspec
+
 main :: IO ()
 main = do
-  hspec CGXFormatterSpec.spec
+  -- hspec CGXFormatterSpec.spec
+  hspec TheResistanceSpec.spec
   -- defaultMain [VoxCodeiSpec.benchmark]
   -- hspec VoxCodeiSpec.spec
   -- WarSpec.spec

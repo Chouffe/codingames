@@ -21,6 +21,7 @@ library
                      , SkynetRevolution
                      , SkynetRevolution2
                      , SuperComputer
+                     , TheResistance
                      , VoxCodei
                      , War
   build-depends:       base >= 4.7 && < 5
@@ -63,10 +64,12 @@ test-suite codingames-test
                      , parsec
                      , pretty
                      , QuickCheck
+                     , text
                      , time
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   other-modules:       SkynetRevolution2Spec
                      , CGXFormatterSpec
+                     , TheResistanceSpec
                      , VoxCodeiSpec
                      , WarSpec
                      , SuperComputerSpec
