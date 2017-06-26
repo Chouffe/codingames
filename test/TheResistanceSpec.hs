@@ -1,8 +1,6 @@
 module TheResistanceSpec (spec) where
 
 import           Control.Monad
-import qualified Data.List     as L
-import qualified Data.Set      as S
 import           Test.Hspec
 import           TheResistance
 
@@ -21,9 +19,16 @@ specInputOutput i =
       case parseGameInput input of
         Nothing      -> fail "Could not parse input/output spec files"
         Just (m, ws) ->
-          show (messageNumber m (dictionary morseTable ws))
+          show (runMemoizedMessageNumber (buildDict morseTable ws) m)
             `shouldBe` output
 
 spec :: Spec
-spec = describe "TheResistance" $
-  forM_ [1..3] specInputOutput  -- TODO: memoize for number 4
+spec = describe "TheResistance" $ do
+  describe "Provided Tests" $
+    forM_ [1..4] specInputOutput
+
+  describe "Extra tests" $
+    forM_ [5..7] specInputOutput
+
+  describe "Multiple Words" $
+    forM_ [8..9] specInputOutput

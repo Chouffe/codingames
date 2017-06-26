@@ -4,12 +4,11 @@
 module TheResistance where
 
 import           Control.Applicative
-import qualified Data.List           as L
-import qualified Data.Map            as M
-import qualified Data.Set            as S
-import qualified Data.Text           as T
+import           Control.Monad.Trans.State.Strict
+import qualified Data.Map                         as M
+import           Data.Maybe                       (mapMaybe)
+import qualified Data.Text                        as T
 import           System.IO
--- import qualified Debug.Trace         as T
 
 -- Data Modeling
 
@@ -17,9 +16,22 @@ type Plain = String
 type PlainChar = Char
 type Morse = T.Text
 type MorseTable = M.Map PlainChar Morse
-data Dictionary = Dictionary { regular :: S.Set Morse, reversed :: S.Set Morse } deriving (Eq, Show)
+type Dict = M.Map Morse Integer  -- TODO: Further improvement: Use a Trie to get prefixes in O(lg n)
+type Memo = M.Map Morse Integer
 
 -- API
+
+emptyDict :: Dict
+emptyDict = M.empty
+
+insertDict :: MorseTable -> Plain -> Dict -> Dict
+insertDict mt word d =
+  case plainToMorse mt word of
+    Nothing -> d
+    Just m  -> M.insertWith (+) m 1 d
+
+buildDict :: Foldable t => MorseTable -> t Plain -> Dict
+buildDict mt = foldr (insertDict mt) emptyDict
 
 morseTable :: MorseTable
 morseTable = M.fromList [ ('A', ".-")
@@ -61,70 +73,6 @@ plainToMorse mt (c:cs) = do
 lookupMorseTable :: PlainChar -> MorseTable -> Maybe Morse
 lookupMorseTable = M.lookup
 
-insert :: MorseTable -> Plain -> Dictionary -> Dictionary
-insert mt word dict =
-  case plainToMorse mt word of
-    Nothing -> dict
-    Just m  -> Dictionary (S.insert m (regular dict))
-                          (S.insert (T.reverse m) (reversed dict))
-
-emptyDictionary :: Dictionary
-emptyDictionary = Dictionary S.empty S.empty
-
-dictionary :: Foldable t => MorseTable -> t Plain -> Dictionary
-dictionary mt = foldr (insert mt) emptyDictionary
-
-elemDictionary :: Morse -> Dictionary -> Bool
-elemDictionary = prefix
-
-prefix :: Morse -> Dictionary -> Bool
-prefix m dict = S.member m (regular dict)
-
-suffix :: Morse -> Dictionary -> Bool
-suffix m dict = S.member (T.reverse m) (reversed dict)
-
-longestPrefix :: Morse -> Dictionary -> Maybe Morse
-longestPrefix m dict = L.find (`prefix` dict) (reverse (T.inits m))
-
-longestSuffix :: Morse -> Dictionary -> Maybe Morse
-longestSuffix m dict = L.find (`suffix` dict) (T.tails m)
-
--- TODO: find a combinator that handles that pattern
-longestPrefixAndSuffix :: Morse -> Dictionary -> Maybe (Morse, Morse)
-longestPrefixAndSuffix m dict = liftA2 (,) (longestPrefix m dict) (longestSuffix m dict)
-
-deleteDictionary :: Morse -> Dictionary -> Dictionary
-deleteDictionary m dict = Dictionary (S.delete m (regular dict))
-                                     (S.delete (T.reverse m) (reversed dict))
-
-deleteLengthDictionary :: Int -> Dictionary -> Dictionary
-deleteLengthDictionary l dict = Dictionary (removeLength (regular dict))
-                                           (removeLength (reversed dict))
-  where
-    removeLength :: S.Set Morse -> S.Set Morse
-    removeLength = S.filter ((< l) . T.length)
-
-deleteWordAndLengthDictionary :: Morse -> Dictionary -> Dictionary
-deleteWordAndLengthDictionary m dict = deleteLengthDictionary (T.length m + 1) (deleteDictionary m dict)
-
-messageNumber :: Morse -> Dictionary -> Int
-messageNumber m dict
-  | elemDictionary m dict = 1 + messageNumber m (deleteDictionary m dict)
-  | otherwise = case mviews m dict of
-                  Nothing -> 0
-                  Just (pr, prs, su, sus) ->
-                    (1 + messageNumber pr (deleteWordAndLengthDictionary pr dict)) *
-                      messageNumber prs (deleteLengthDictionary (T.length prs + 1) dict) +
-                    (1 + messageNumber su (deleteWordAndLengthDictionary su dict)) *
-                      messageNumber sus (deleteLengthDictionary (T.length sus + 1) dict)
-      where
-        mviews :: Morse -> Dictionary -> Maybe (T.Text, T.Text, T.Text, T.Text)
-        mviews morse d = do
-          (pr, su) <- longestPrefixAndSuffix morse d
-          prs <- T.stripPrefix pr morse
-          sus <- T.stripSuffix su morse
-          return (pr, prs, su, sus)
-
 -- Parsers
 
 parseMorse :: String -> Maybe Morse
@@ -138,15 +86,39 @@ parseGameInput content = case lines content of
                            (m:_:xs) -> liftA2 (,) (parseMorse m) (parsePlain xs)
                            _        -> Nothing
 
--- Debug Logic
-
-debugMain :: Morse -> [Plain] -> IO ()
-debugMain morse ws = do
-  hPutStrLn stderr $ "morse: " ++ T.unpack morse
-  hPutStrLn stderr "words:"
-  mapM_ (hPutStrLn stderr) ws
 
 -- Game Logic
+
+-- Non memoized solution: does not scale on large inputs
+messageNumber :: Dict -> Morse -> Integer
+messageNumber _ "" = 1
+messageNumber d m  = sum $ map (\(_, s, l) -> l * messageNumber d s) $ getPrefixesAndSuffixes d m
+
+-- Memoized solution
+memoizedMessageNumber :: Dict -> Morse -> State Memo Integer
+memoizedMessageNumber d m = do
+  memo <- get
+  case M.lookup m memo of
+    Just n  -> return n
+    Nothing -> do
+      ns <- traverse (\(_, s, l) -> (*l) <$> memoizedMessageNumber d s) (getPrefixesAndSuffixes d m)
+      modify (M.insert m (sum ns))
+      return (sum ns)
+
+runMemoizedMessageNumber :: Dict -> Morse -> Integer
+runMemoizedMessageNumber d m = evalState (memoizedMessageNumber d m) (M.fromList [("", 1)])
+
+getPrefixes :: Dict -> Morse -> [(Morse, Integer)]
+getPrefixes d m = M.toList $ M.filterWithKey (\k -> const (T.isPrefixOf k m)) d
+
+getPrefixesAndSuffixes :: Dict -> Morse -> [(Morse, Morse, Integer)]
+getPrefixesAndSuffixes d m =
+  mapMaybe (\(p, n) -> case T.stripPrefix p m of
+                            Nothing -> Nothing
+                            Just s  -> Just (p, s, n)) prefixes
+   where
+     prefixes :: [(Morse, Integer)]
+     prefixes = getPrefixes d m
 
 main :: IO ()
 main = do
@@ -156,21 +128,12 @@ main = do
       Nothing -> fail "Could not parse Game Input"
       Just (morse, ws) -> do
         debugMain morse ws
-        print (messageNumber morse (dictionary morseTable ws))
+        print (runMemoizedMessageNumber (buildDict morseTable ws) morse)
 
--- Tests
+-- Debug Logic
 
-tests :: [(Morse, Int)]
-tests = [ ("-.-", 1)
-        , ("--.-------..", 1)
-        , ("......-...-..---.-----.-..-..-..", 2)
-        ]
-
-mdictionary1 :: Dictionary
-mdictionary1 = dictionary morseTable ["A", "B", "C", "HELLO", "K", "WORLD"]
-
-mdictionary2 :: Dictionary
-mdictionary2 = dictionary morseTable ["GOD", "GOOD", "MORNING", "G", "HELLO"]
-
-mdictionary3 :: Dictionary
-mdictionary3 = dictionary morseTable ["HELL", "HELLO", "OWRLD", "WORLD","TEST"]
+debugMain :: Morse -> [Plain] -> IO ()
+debugMain morse ws = do
+  hPutStrLn stderr $ "morse: " ++ T.unpack morse
+  hPutStrLn stderr "words:"
+  mapM_ (hPutStrLn stderr) ws
