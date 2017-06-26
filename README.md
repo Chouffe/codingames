@@ -14,6 +14,7 @@ The goal is to practice my Haskell and have some fun in the process.
 - SkynetRevolution
 - SkynetRevolution2
 - SuperComputer
+- TheResistance
 - War
 
 ### WIP
