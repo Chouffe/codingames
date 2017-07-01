@@ -10,6 +10,7 @@ The goal is to practice my Haskell and have some fun in the process.
 
 - CGXFormatter
 - Descent
+- PowerOfThor
 - ShadowsOfTheKnight
 - SkynetRevolution
 - SkynetRevolution2
